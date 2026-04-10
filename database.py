@@ -1,0 +1,193 @@
+import os
+import asyncpg
+import logging
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+_pool = None
+
+
+async def get_pool():
+    global _pool
+    if _pool is None:
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL er ikke satt")
+        # Railway bruker postgres:// men asyncpg vil ha postgresql://
+        database_url = database_url.replace("postgres://", "postgresql://")
+        _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
+        logger.info("Databasetilkobling opprettet")
+    return _pool
+
+
+async def init_db():
+    """Oppretter tabeller hvis de ikke finnes."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id          TEXT PRIMARY KEY,
+                source      TEXT NOT NULL,
+                source_label TEXT NOT NULL,
+                category    TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                tldr        TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                time_label  TEXT NOT NULL,
+                timestamp   TIMESTAMPTZ NOT NULL,
+                priority    TEXT NOT NULL DEFAULT 'medium',
+                status      TEXT NOT NULL DEFAULT 'unread',
+                meta        JSONB,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS messages_status_idx ON messages(status);
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS messages_timestamp_idx ON messages(timestamp DESC);
+        """)
+        logger.info("Database initialisert")
+
+
+async def upsert_messages(messages: list[dict]):
+    """
+    Lagrer nye meldinger i databasen.
+    Hvis meldingen allerede finnes (samme id), oppdateres alt UNNTATT status –
+    slik at brukerens lest/ikke-relevant-valg beholdes.
+    """
+    if not messages:
+        return 0
+
+    pool = await get_pool()
+    inserted = 0
+
+    async with pool.acquire() as conn:
+        for msg in messages:
+            try:
+                ts = msg.get("timestamp")
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts)
+                if ts and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+
+                import json
+                meta = json.dumps(msg.get("meta") or {})
+
+                result = await conn.execute("""
+                    INSERT INTO messages
+                        (id, source, source_label, category, title, tldr, body,
+                         time_label, timestamp, priority, status, meta)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
+                    ON CONFLICT (id) DO UPDATE SET
+                        title       = EXCLUDED.title,
+                        tldr        = EXCLUDED.tldr,
+                        body        = EXCLUDED.body,
+                        time_label  = EXCLUDED.time_label,
+                        priority    = EXCLUDED.priority,
+                        meta        = EXCLUDED.meta,
+                        updated_at  = NOW()
+                    -- status berøres IKKE – brukerens valg beholdes
+                """,
+                    msg["id"],
+                    msg["source"],
+                    msg.get("sourceLabel", msg["source"]),
+                    msg.get("category", "annet"),
+                    msg.get("title", ""),
+                    msg.get("tldr", ""),
+                    msg.get("body", ""),
+                    msg.get("time", ""),
+                    ts or datetime.now(timezone.utc),
+                    msg.get("priority", "medium"),
+                    msg.get("status", "unread"),
+                    meta
+                )
+                if "INSERT 0 1" in result:
+                    inserted += 1
+            except Exception as e:
+                logger.error(f"Feil ved lagring av melding {msg.get('id')}: {e}")
+
+    logger.info(f"Lagret {inserted} nye meldinger i databasen")
+    return inserted
+
+
+async def get_all_messages(limit: int = 200) -> list[dict]:
+    """Henter alle meldinger fra databasen, nyeste først."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, source, source_label, category, title, tldr, body,
+                   time_label, timestamp, priority, status, meta
+            FROM messages
+            ORDER BY timestamp DESC
+            LIMIT $1
+        """, limit)
+
+    return [_row_to_dict(row) for row in rows]
+
+
+async def update_message_status(message_id: str, status: str) -> bool:
+    """Oppdaterer status på en melding. Returnerer True hvis meldingen ble funnet."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE messages
+            SET status = $1, updated_at = NOW()
+            WHERE id = $2
+        """, status, message_id)
+    return result == "UPDATE 1"
+
+
+async def get_stats() -> dict:
+    """Henter statistikk fra databasen."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT
+                COUNT(*)                                    AS total,
+                COUNT(*) FILTER (WHERE status = 'unread')  AS unread,
+                COUNT(*) FILTER (WHERE status = 'read')    AS read,
+                COUNT(*) FILTER (WHERE status = 'skipped') AS skipped
+            FROM messages
+        """)
+        sources = await conn.fetch("""
+            SELECT source, source_label, COUNT(*) AS count
+            FROM messages
+            GROUP BY source, source_label
+            ORDER BY count DESC
+        """)
+    return {
+        "total": row["total"],
+        "unread": row["unread"],
+        "read": row["read"],
+        "skipped": row["skipped"],
+        "sources": [{"source": r["source"], "label": r["source_label"], "count": r["count"]} for r in sources]
+    }
+
+
+def _row_to_dict(row) -> dict:
+    """Konverterer en databaserad til vårt meldingsformat."""
+    import json
+    meta = row["meta"]
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = {}
+
+    return {
+        "id": row["id"],
+        "source": row["source"],
+        "sourceLabel": row["source_label"],
+        "category": row["category"],
+        "title": row["title"],
+        "tldr": row["tldr"],
+        "body": row["body"],
+        "time": row["time_label"],
+        "timestamp": row["timestamp"].isoformat() if row["timestamp"] else "",
+        "priority": row["priority"],
+        "status": row["status"],
+        "meta": meta or {}
+    }

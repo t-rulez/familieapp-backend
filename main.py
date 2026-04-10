@@ -11,22 +11,18 @@ from pydantic import BaseModel
 
 from spond_service import SpondService
 from email_service import EmailService, get_email_config
-from models import Message
+from database import init_db, upsert_messages, get_all_messages, update_message_status, get_stats
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── In-memory cache ──────────────────────────────────────────────────────────
-
-cache: dict = {
-    "messages": [],
-    "last_sync": None
-}
+# ─── Synk-tidspunkt (i minne) ─────────────────────────────────────────────────
+last_sync: Optional[str] = None
 
 # ─── Sync-funksjon ────────────────────────────────────────────────────────────
 
-async def run_sync():
-    """Henter meldinger fra alle kilder og merger med eksisterende cache."""
+async def run_sync() -> int:
+    global last_sync
     all_messages = []
 
     # Spond
@@ -37,40 +33,33 @@ async def run_sync():
                 username=os.environ["SPOND_USERNAME"],
                 password=os.environ["SPOND_PASSWORD"]
             )
-            spond_msgs = await spond_svc.fetch_all()
-            all_messages.extend(spond_msgs)
-            logger.info(f"Spond: {len(spond_msgs)} meldinger")
+            msgs = await spond_svc.fetch_all()
+            all_messages.extend(msgs)
+            logger.info(f"Spond: {len(msgs)} meldinger")
         except Exception as e:
             logger.error(f"Spond-synk feilet: {e}")
 
-    # E-post (Skolemelding, Showbie, osv.)
-    email_configs = get_email_config()
-    if email_configs:
-        for config in email_configs:
-            try:
-                logger.info(f"Synkroniserer e-post: {config['source_label']} ({config['username']})")
-                svc = EmailService(config)
-                email_msgs = await asyncio.to_thread(svc.fetch_all)
-                all_messages.extend(email_msgs)
-                logger.info(f"{config['source_label']}: {len(email_msgs)} meldinger")
-            except Exception as e:
-                logger.error(f"E-post-synk feilet ({config.get('source_label')}): {e}")
+    # E-post
+    for config in get_email_config():
+        try:
+            logger.info(f"Synkroniserer e-post: {config['source_label']}")
+            svc = EmailService(config)
+            msgs = await asyncio.to_thread(svc.fetch_all)
+            all_messages.extend(msgs)
+            logger.info(f"{config['source_label']}: {len(msgs)} meldinger")
+        except Exception as e:
+            logger.error(f"E-post-synk feilet ({config.get('source_label')}): {e}")
 
-    # Merger med eksisterende cache (behold status-endringer)
-    existing = {m["id"]: m for m in cache["messages"]}
-    for msg in all_messages:
-        if msg["id"] in existing:
-            msg["status"] = existing[msg["id"]]["status"]
+    # Lagre i database (status beholdes automatisk)
+    await upsert_messages(all_messages)
 
-    all_messages.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-
-    cache["messages"] = all_messages
-    cache["last_sync"] = datetime.now(timezone.utc).isoformat()
-    logger.info(f"Synk ferdig - totalt {len(all_messages)} meldinger")
+    last_sync = datetime.now(timezone.utc).isoformat()
+    total = len(await get_all_messages())
+    logger.info(f"Synk ferdig – {len(all_messages)} hentet, {total} totalt i DB")
+    return len(all_messages)
 
 
 async def sync_loop():
-    """Kjorer synkronisering i bakgrunnen hvert 30. minutt."""
     while True:
         try:
             await run_sync()
@@ -81,6 +70,7 @@ async def sync_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await init_db()
     task = asyncio.create_task(sync_loop())
     yield
     task.cancel()
@@ -104,49 +94,48 @@ def verify_token(x_api_token: Optional[str] = Header(None)):
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/")
-def root():
-    sources = list(set(m["source"] for m in cache["messages"]))
+async def root():
+    stats = await get_stats()
     return {
         "status": "ok",
-        "last_sync": cache["last_sync"],
-        "message_count": len(cache["messages"]),
-        "sources": sources
+        "last_sync": last_sync,
+        **stats
     }
 
 @app.get("/messages")
-def get_messages(x_api_token: Optional[str] = Header(None)):
+async def get_messages(x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
+    messages = await get_all_messages()
     return {
-        "messages": cache["messages"],
-        "last_sync": cache["last_sync"],
-        "count": len(cache["messages"])
+        "messages": messages,
+        "last_sync": last_sync,
+        "count": len(messages)
     }
 
 class StatusUpdate(BaseModel):
     status: str
 
 @app.patch("/messages/{message_id}")
-def update_message(message_id: str, update: StatusUpdate, x_api_token: Optional[str] = Header(None)):
+async def update_message(message_id: str, update: StatusUpdate, x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
     if update.status not in ("read", "skipped", "unread"):
         raise HTTPException(status_code=400, detail="Ugyldig status")
-    for msg in cache["messages"]:
-        if msg["id"] == message_id:
-            msg["status"] = update.status
-            return {"ok": True}
-    raise HTTPException(status_code=404, detail="Melding ikke funnet")
+    found = await update_message_status(message_id, update.status)
+    if not found:
+        raise HTTPException(status_code=404, detail="Melding ikke funnet")
+    return {"ok": True}
 
 @app.post("/sync")
 async def trigger_sync(x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
     try:
-        await run_sync()
-        return {"ok": True, "count": len(cache["messages"])}
+        count = await run_sync()
+        return {"ok": True, "count": count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/config/email")
-def get_email_config_status(x_api_token: Optional[str] = Header(None)):
+async def email_config_status(x_api_token: Optional[str] = Header(None)):
     verify_token(x_api_token)
     configs = get_email_config()
     return {
