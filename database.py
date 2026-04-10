@@ -113,30 +113,46 @@ async def upsert_messages(messages: list[dict]):
     return inserted
 
 
-async def get_all_messages(limit: int = 200) -> list[dict]:
-    """Henter alle meldinger fra databasen, nyeste først."""
+async def get_all_messages(limit: int = 200, user_id: str = None) -> list[dict]:
+    """Henter meldinger fra databasen, nyeste først."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT id, source, source_label, category, title, tldr, body,
-                   time_label, timestamp, priority, status, meta
-            FROM messages
-            ORDER BY timestamp DESC
-            LIMIT $1
-        """, limit)
-
+        if user_id:
+            rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr, body,
+                       time_label, timestamp, priority, status, meta
+                FROM messages
+                WHERE user_id = $2
+                ORDER BY timestamp DESC
+                LIMIT $1
+            """, limit, user_id)
+        else:
+            rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr, body,
+                       time_label, timestamp, priority, status, meta
+                FROM messages
+                ORDER BY timestamp DESC
+                LIMIT $1
+            """, limit)
     return [_row_to_dict(row) for row in rows]
 
 
-async def update_message_status(message_id: str, status: str) -> bool:
+async def update_message_status(message_id: str, status: str, user_id: str = None) -> bool:
     """Oppdaterer status på en melding. Returnerer True hvis meldingen ble funnet."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute("""
-            UPDATE messages
-            SET status = $1, updated_at = NOW()
-            WHERE id = $2
-        """, status, message_id)
+        if user_id:
+            result = await conn.execute("""
+                UPDATE messages
+                SET status = $1, updated_at = NOW()
+                WHERE id = $2 AND user_id = $3
+            """, status, message_id, user_id)
+        else:
+            result = await conn.execute("""
+                UPDATE messages
+                SET status = $1, updated_at = NOW()
+                WHERE id = $2
+            """, status, message_id)
     return result == "UPDATE 1"
 
 
@@ -224,24 +240,32 @@ async def init_ai_tables():
     logger.info("AI-tabeller initialisert")
 
 
-async def get_classified_messages(limit: int = 30) -> tuple[list[dict], list[dict]]:
+async def get_classified_messages(limit: int = 30, user_id: str = None) -> tuple[list[dict], list[dict]]:
     """Henter eksempler på leste og ignorerte meldinger for AI-læring."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        read_rows = await conn.fetch("""
-            SELECT id, source, source_label, category, title, tldr
-            FROM messages
-            WHERE status = 'read'
-            ORDER BY updated_at DESC
-            LIMIT $1
-        """, limit)
-        skip_rows = await conn.fetch("""
-            SELECT id, source, source_label, category, title, tldr
-            FROM messages
-            WHERE status = 'skipped'
-            ORDER BY updated_at DESC
-            LIMIT $1
-        """, limit)
+        if user_id:
+            read_rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr
+                FROM messages WHERE status = 'read' AND user_id = $2
+                ORDER BY updated_at DESC LIMIT $1
+            """, limit, user_id)
+            skip_rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr
+                FROM messages WHERE status = 'skipped' AND user_id = $2
+                ORDER BY updated_at DESC LIMIT $1
+            """, limit, user_id)
+        else:
+            read_rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr
+                FROM messages WHERE status = 'read'
+                ORDER BY updated_at DESC LIMIT $1
+            """, limit)
+            skip_rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr
+                FROM messages WHERE status = 'skipped'
+                ORDER BY updated_at DESC LIMIT $1
+            """, limit)
 
     def row_to_dict(r):
         return {
@@ -256,21 +280,32 @@ async def get_classified_messages(limit: int = 30) -> tuple[list[dict], list[dic
     return [row_to_dict(r) for r in read_rows], [row_to_dict(r) for r in skip_rows]
 
 
-async def get_user_profile() -> str | None:
+async def get_user_profile(user_id: str = None) -> str | None:
     """Henter lagret brukerprofil."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT profile FROM user_profile WHERE id = 1")
+        if user_id:
+            row = await conn.fetchrow(
+                "SELECT profile FROM user_profile WHERE user_id = $1", user_id)
+        else:
+            row = await conn.fetchrow("SELECT profile FROM user_profile WHERE id = 1")
         return row["profile"] if row else None
 
 
-async def save_user_profile(profile: str):
+async def save_user_profile(profile: str, user_id: str = None):
     """Lagrer oppdatert brukerprofil."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("""
-            UPDATE user_profile SET profile = $1, updated_at = NOW() WHERE id = 1
-        """, profile)
+        if user_id:
+            await conn.execute("""
+                INSERT INTO user_profile (user_id, profile)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET profile = $2, updated_at = NOW()
+            """, user_id, profile)
+        else:
+            await conn.execute("""
+                UPDATE user_profile SET profile = $1, updated_at = NOW() WHERE id = 1
+            """, profile)
     logger.info(f"Brukerprofil oppdatert: {profile[:80]}...")
 
 
@@ -292,15 +327,20 @@ async def save_ai_result(message_id: str, tldr: str, score: str, reason: str, au
         """, tldr, score, reason, auto_skip, message_id)
 
 
-async def get_unprocessed_messages(limit: int = 20) -> list[dict]:
+async def get_unprocessed_messages(limit: int = 20, user_id: str = None) -> list[dict]:
     """Henter nye meldinger som ikke har fått AI-vurdering ennå."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT id, source, source_label, category, title, tldr, body
-            FROM messages
-            WHERE ai_score IS NULL
-            ORDER BY timestamp DESC
-            LIMIT $1
-        """, limit)
+        if user_id:
+            rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr, body
+                FROM messages WHERE ai_score IS NULL AND user_id = $2
+                ORDER BY timestamp DESC LIMIT $1
+            """, limit, user_id)
+        else:
+            rows = await conn.fetch("""
+                SELECT id, source, source_label, category, title, tldr, body
+                FROM messages WHERE ai_score IS NULL
+                ORDER BY timestamp DESC LIMIT $1
+            """, limit)
     return [dict(r) for r in rows]
