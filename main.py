@@ -482,6 +482,16 @@ async def push_unsubscribe(sub: PushSubscription, user: CurrentUser):
     await delete_push_subscription(sub.endpoint)
     return {"ok": True}
 
+@app.delete("/push/all")
+async def push_unsubscribe_all(user: CurrentUser):
+    """Sletter alle push-abonnementer for brukeren."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM push_subscriptions WHERE user_id = $1", user["id"]
+        )
+    return {"ok": True}
+
 @app.get("/push/vapid-key")
 async def get_vapid_key():
     return {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", "")}
