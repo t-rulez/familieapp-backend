@@ -37,7 +37,7 @@ async def run_ai_processing():
         logger.info("ANTHROPIC_API_KEY ikke satt – hopper over AI-behandling")
         return
 
-    unprocessed = await get_unprocessed_messages(limit=20)
+    unprocessed = await get_unprocessed_messages(limit=5)
     if not unprocessed:
         logger.info("Ingen nye meldinger a behandle med AI")
         return
@@ -101,44 +101,55 @@ async def run_ai_processing():
 
 # ─── Synk-funksjon ────────────────────────────────────────────────────────────
 
+async def fetch_spond() -> list:
+    if not os.environ.get("SPOND_USERNAME"):
+        return []
+    try:
+        logger.info("Synkroniserer Spond...")
+        svc = SpondService(
+            username=os.environ["SPOND_USERNAME"],
+            password=os.environ["SPOND_PASSWORD"]
+        )
+        msgs = await svc.fetch_all()
+        logger.info(f"Spond: {len(msgs)} meldinger")
+        return msgs
+    except Exception as e:
+        logger.error(f"Spond-synk feilet: {e}")
+        return []
+
+
+async def fetch_email(config: dict) -> list:
+    try:
+        logger.info(f"Synkroniserer e-post: {config['source_label']}")
+        svc = EmailService(config)
+        msgs = await asyncio.to_thread(svc.fetch_all)
+        logger.info(f"{config['source_label']}: {len(msgs)} meldinger")
+        return msgs
+    except Exception as e:
+        logger.error(f"E-post-synk feilet ({config.get('source_label')}): {e}")
+        return []
+
+
 async def run_sync() -> int:
     global last_sync
-    all_messages = []
 
-    # Spond
-    if os.environ.get("SPOND_USERNAME"):
-        try:
-            logger.info("Synkroniserer Spond...")
-            spond_svc = SpondService(
-                username=os.environ["SPOND_USERNAME"],
-                password=os.environ["SPOND_PASSWORD"]
-            )
-            msgs = await spond_svc.fetch_all()
-            all_messages.extend(msgs)
-            logger.info(f"Spond: {len(msgs)} meldinger")
-        except Exception as e:
-            logger.error(f"Spond-synk feilet: {e}")
-
-    # E-post
+    # Hent alle kilder parallelt
+    tasks = [fetch_spond()]
     for config in get_email_config():
-        try:
-            logger.info(f"Synkroniserer e-post: {config['source_label']}")
-            svc = EmailService(config)
-            msgs = await asyncio.to_thread(svc.fetch_all)
-            all_messages.extend(msgs)
-            logger.info(f"{config['source_label']}: {len(msgs)} meldinger")
-        except Exception as e:
-            logger.error(f"E-post-synk feilet ({config.get('source_label')}): {e}")
+        tasks.append(fetch_email(config))
+
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    all_messages = [msg for result in results for msg in result]
 
     # Lagre i database
     await upsert_messages(all_messages)
 
-    # Kjor AI-behandling pa nye meldinger
-    await run_ai_processing()
-
     last_sync = datetime.now(timezone.utc).isoformat()
-    total = len(await get_all_messages())
-    logger.info(f"Synk ferdig – {total} totalt i DB")
+    logger.info(f"Datahenting ferdig – {len(all_messages)} meldinger hentet")
+
+    # AI kjorer i bakgrunnen – ikke blokker synk-responsen
+    asyncio.create_task(run_ai_processing())
+
     return len(all_messages)
 
 
