@@ -16,7 +16,8 @@ from database import (
     upsert_messages, get_all_messages, update_message_status,
     get_stats, get_classified_messages, get_user_profile,
     save_user_profile, save_ai_result, get_unprocessed_messages,
-    save_push_subscription, delete_push_subscription, get_push_subscriptions
+    save_push_subscription, delete_push_subscription, get_push_subscriptions,
+    count_unread_messages
 )
 from push_service import send_push_to_user
 from users import (
@@ -124,8 +125,19 @@ async def sync_user(user: dict) -> int:
         except Exception as e:
             logger.error(f"E-post-2-synk feilet ({user['email']}): {e}")
 
+    # Tell hvor mange som er nye (ikke eksisterende)
+    from database import count_unread_messages
+    before = await count_unread_messages(user_id)
     await upsert_messages(all_messages)
+    after = await count_unread_messages(user_id)
+    new_count = after - before
+
     asyncio.create_task(run_ai_processing(user_id))
+
+    # Send push-varsel hvis det kom nye meldinger
+    if new_count > 0:
+        asyncio.create_task(notify_new_messages(user_id, new_count))
+
     return len(all_messages)
 
 

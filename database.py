@@ -391,3 +391,13 @@ async def get_push_subscriptions(user_id: str) -> list[dict]:
             SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1
         """, user_id)
     return [{"endpoint": r["endpoint"], "keys": {"p256dh": r["p256dh"], "auth": r["auth"]}} for r in rows]
+
+
+async def count_unread_messages(user_id: str) -> int:
+    """Teller uleste meldinger for en bruker."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval("""
+            SELECT COUNT(*) FROM messages
+            WHERE user_id = $1 AND status = 'unread'
+        """, user_id)
