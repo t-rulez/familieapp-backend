@@ -11,29 +11,52 @@ MODEL = "claude-sonnet-4-20250514"
 
 
 async def _call_claude(system: str, user: str, max_tokens: int = 500) -> str:
-    """Kaller Claude API og returnerer tekstsvaret."""
+    """Kaller Claude API med automatisk retry ved overbelastning (529) eller rate limit (429)."""
+    import asyncio
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY er ikke satt")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            ANTHROPIC_API_URL,
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            },
-            json={
-                "model": MODEL,
-                "max_tokens": max_tokens,
-                "system": system,
-                "messages": [{"role": "user", "content": user}]
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["content"][0]["text"].strip()
+    delays = [2, 5, 15]  # sekunder mellom forsøk
+
+    for attempt, delay in enumerate(delays + [None], 1):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    ANTHROPIC_API_URL,
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json"
+                    },
+                    json={
+                        "model": MODEL,
+                        "max_tokens": max_tokens,
+                        "system": system,
+                        "messages": [{"role": "user", "content": user}]
+                    }
+                )
+
+                if response.status_code in (429, 529):
+                    if delay is not None:
+                        logger.warning(f"API overbelastet ({response.status_code}), venter {delay}s (forsok {attempt}/3)...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise RuntimeError(f"API fortsatt utilgjengelig etter 3 forsok ({response.status_code})")
+
+                response.raise_for_status()
+                data = response.json()
+                return data["content"][0]["text"].strip()
+
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            if delay is not None:
+                logger.warning(f"Nettverksfeil, venter {delay}s (forsok {attempt}/3): {e}")
+                await asyncio.sleep(delay)
+            else:
+                raise
+
+    raise RuntimeError("API-kall feilet etter alle forsok")
 
 
 async def generate_tldr(title: str, body: str, source_label: str) -> str:
