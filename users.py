@@ -18,77 +18,108 @@ async def init_user_tables():
         # Brukere
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id           TEXT PRIMARY KEY,
-                email        TEXT UNIQUE NOT NULL,
-                display_name TEXT NOT NULL,
+                id            TEXT PRIMARY KEY,
+                email         TEXT UNIQUE NOT NULL,
+                display_name  TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
-                is_admin     BOOLEAN DEFAULT FALSE,
-                created_at   TIMESTAMPTZ DEFAULT NOW(),
-                last_login   TIMESTAMPTZ
+                is_admin      BOOLEAN DEFAULT FALSE,
+                created_at    TIMESTAMPTZ DEFAULT NOW(),
+                last_login    TIMESTAMPTZ
             )
         """)
 
         # Innstillinger per bruker (sensitiv data kryptert)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_settings (
-                user_id         TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-
-                -- Spond
-                spond_username  TEXT,
-                spond_password  TEXT,  -- kryptert
-                spond_enabled   BOOLEAN DEFAULT FALSE,
-
-                -- E-post / IMAP (støtter inntil 3 kontoer)
-                email_1_host            TEXT,
-                email_1_port            INTEGER DEFAULT 993,
-                email_1_username        TEXT,
-                email_1_password        TEXT,  -- kryptert
-                email_1_from_filter     TEXT,
-                email_1_subject_filter  TEXT,
-                email_1_delete_after    BOOLEAN DEFAULT FALSE,
-                email_1_source_label    TEXT DEFAULT 'Skolemelding',
-                email_1_source          TEXT DEFAULT 'skolemelding',
-                email_1_category        TEXT DEFAULT 'skole',
-                email_1_enabled         BOOLEAN DEFAULT FALSE,
-
-                email_2_host            TEXT,
-                email_2_port            INTEGER DEFAULT 993,
-                email_2_username        TEXT,
-                email_2_password        TEXT,  -- kryptert
-                email_2_from_filter     TEXT,
-                email_2_subject_filter  TEXT,
-                email_2_delete_after    BOOLEAN DEFAULT FALSE,
-                email_2_source_label    TEXT DEFAULT 'Showbie',
-                email_2_source          TEXT DEFAULT 'showbie',
-                email_2_category        TEXT DEFAULT 'skole',
-                email_2_enabled         BOOLEAN DEFAULT FALSE,
-
-                -- WhatsApp
-                wa_group_filter TEXT,  -- kommaseparert
-                wa_category     TEXT DEFAULT 'foreldre',
-                wa_source_label TEXT DEFAULT 'WhatsApp',
-                wa_enabled      BOOLEAN DEFAULT FALSE,
-
-                updated_at TIMESTAMPTZ DEFAULT NOW()
+                user_id               TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                spond_username        TEXT,
+                spond_password        TEXT,
+                spond_enabled         BOOLEAN DEFAULT FALSE,
+                email_1_host          TEXT,
+                email_1_port          INTEGER DEFAULT 993,
+                email_1_username      TEXT,
+                email_1_password      TEXT,
+                email_1_from_filter   TEXT,
+                email_1_subject_filter TEXT,
+                email_1_delete_after  BOOLEAN DEFAULT FALSE,
+                email_1_source_label  TEXT DEFAULT 'Skolemelding',
+                email_1_source        TEXT DEFAULT 'skolemelding',
+                email_1_category      TEXT DEFAULT 'skole',
+                email_1_enabled       BOOLEAN DEFAULT FALSE,
+                email_2_host          TEXT,
+                email_2_port          INTEGER DEFAULT 993,
+                email_2_username      TEXT,
+                email_2_password      TEXT,
+                email_2_from_filter   TEXT,
+                email_2_subject_filter TEXT,
+                email_2_delete_after  BOOLEAN DEFAULT FALSE,
+                email_2_source_label  TEXT DEFAULT 'Showbie',
+                email_2_source        TEXT DEFAULT 'showbie',
+                email_2_category      TEXT DEFAULT 'skole',
+                email_2_enabled       BOOLEAN DEFAULT FALSE,
+                wa_group_filter       TEXT,
+                wa_category           TEXT DEFAULT 'foreldre',
+                wa_source_label       TEXT DEFAULT 'WhatsApp',
+                wa_enabled            BOOLEAN DEFAULT FALSE,
+                updated_at            TIMESTAMPTZ DEFAULT NOW()
             )
         """)
 
-        # Meldinger kobles til bruker
+        # Koble meldinger til bruker
         await conn.execute("""
             ALTER TABLE messages
-                ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE
+                ADD COLUMN IF NOT EXISTS user_id TEXT
         """)
         await conn.execute("""
-            CREATE INDEX IF NOT EXISTS messages_user_idx ON messages(user_id)
+            CREATE INDEX IF NOT EXISTS messages_user_idx
+            ON messages(user_id) WHERE user_id IS NOT NULL
         """)
 
-        # Brukerprofil kobles til bruker
+        # Koble brukerprofil til bruker
         await conn.execute("""
             ALTER TABLE user_profile
-                ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE
+                ADD COLUMN IF NOT EXISTS user_id TEXT
+        """)
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS user_profile_user_idx
+            ON user_profile(user_id) WHERE user_id IS NOT NULL
         """)
 
+    # Migrer eksisterende meldinger til første bruker
+    await _migrate_existing_data(conn)
+
     logger.info("Brukertabeller initialisert")
+
+
+async def _migrate_existing_data(conn):
+    """
+    Knytter eksisterende meldinger og AI-profil til første bruker.
+    Kjores automatisk ved oppstart – trygg a kjore flere ganger.
+    """
+    # Finn første bruker
+    first_user = await conn.fetchrow(
+        "SELECT id FROM users ORDER BY created_at ASC LIMIT 1"
+    )
+    if not first_user:
+        return  # Ingen brukere ennå
+
+    user_id = first_user["id"]
+
+    # Knytt meldinger uten user_id til første bruker
+    result = await conn.execute("""
+        UPDATE messages SET user_id = $1 WHERE user_id IS NULL
+    """, user_id)
+    count = int(result.split()[-1])
+    if count > 0:
+        logger.info(f"Migrerte {count} meldinger til bruker {user_id}")
+
+    # Knytt AI-profil uten user_id til første bruker
+    await conn.execute("""
+        UPDATE user_profile SET user_id = $1
+        WHERE user_id IS NULL AND profile IS NOT NULL
+    """, user_id)
+
+    logger.info(f"Migrering fullfort for bruker {user_id}")
 
 
 # ─── Bruker-CRUD ──────────────────────────────────────────────────────────────

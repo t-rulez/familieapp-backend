@@ -163,9 +163,10 @@ async def sync_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    await init_ai_tables()
-    await init_user_tables()
+    # Rekkefølge er viktig: basis -> AI -> brukere
+    await init_db()          # messages, user_profile (basis)
+    await init_ai_tables()   # AI-kolonner på messages
+    await init_user_tables() # users, user_settings, koble user_id
     task = asyncio.create_task(sync_loop())
     yield
     task.cancel()
