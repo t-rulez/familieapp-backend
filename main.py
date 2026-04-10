@@ -353,6 +353,38 @@ async def ingest_messages(
     return {"ok": True, "count": len(payload.messages)}
 
 
+# ─── Admin: opprydding ───────────────────────────────────────────────────────
+
+@app.post("/admin/fix-null-users")
+async def fix_null_users(user: CurrentUser):
+    """Knytter alle meldinger med user_id=NULL til innlogget bruker."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE messages SET user_id = $1 WHERE user_id IS NULL
+        """, user["id"])
+    count = int(result.split()[-1])
+    return {"ok": True, "fixed": count}
+
+@app.post("/admin/fix-categories")
+async def fix_categories(user: CurrentUser):
+    """Normaliserer kategorinavn i databasen til lowercase."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Normaliser alle kategorier til lowercase
+        result = await conn.execute("""
+            UPDATE messages SET category = LOWER(category)
+            WHERE category != LOWER(category)
+        """)
+        count = int(result.split()[-1])
+        # Rename foreldre -> whatsapp for whatsapp-meldinger
+        result2 = await conn.execute("""
+            UPDATE messages SET category = 'whatsapp'
+            WHERE source = 'whatsapp' AND category = 'foreldre'
+        """)
+        count2 = int(result2.split()[-1])
+    return {"ok": True, "normalized": count, "whatsapp_fixed": count2}
+
 # ─── Push-abonnementer ────────────────────────────────────────────────────────
 
 class PushSubscription(BaseModel):
