@@ -191,3 +191,116 @@ def _row_to_dict(row) -> dict:
         "status": row["status"],
         "meta": meta or {}
     }
+
+
+# ─── AI / profil-funksjoner ───────────────────────────────────────────────────
+
+async def init_ai_tables():
+    """Oppretter AI-relaterte tabeller."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Lagre AI-score og TL;DR per melding
+        await conn.execute("""
+            ALTER TABLE messages
+                ADD COLUMN IF NOT EXISTS ai_score      TEXT,
+                ADD COLUMN IF NOT EXISTS ai_reason     TEXT,
+                ADD COLUMN IF NOT EXISTS ai_auto_skip  BOOLEAN DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS ai_tldr       TEXT
+        """)
+        # Brukerprofil-tabell
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id          INTEGER PRIMARY KEY DEFAULT 1,
+                profile     TEXT,
+                updated_at  TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT single_row CHECK (id = 1)
+            )
+        """)
+        await conn.execute("""
+            INSERT INTO user_profile (id, profile)
+            VALUES (1, NULL)
+            ON CONFLICT (id) DO NOTHING
+        """)
+    logger.info("AI-tabeller initialisert")
+
+
+async def get_classified_messages(limit: int = 30) -> tuple[list[dict], list[dict]]:
+    """Henter eksempler på leste og ignorerte meldinger for AI-læring."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        read_rows = await conn.fetch("""
+            SELECT id, source, source_label, category, title, tldr
+            FROM messages
+            WHERE status = 'read'
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
+        skip_rows = await conn.fetch("""
+            SELECT id, source, source_label, category, title, tldr
+            FROM messages
+            WHERE status = 'skipped'
+            ORDER BY updated_at DESC
+            LIMIT $1
+        """, limit)
+
+    def row_to_dict(r):
+        return {
+            "id": r["id"],
+            "source": r["source"],
+            "source_label": r["source_label"],
+            "category": r["category"],
+            "title": r["title"],
+            "tldr": r["tldr"]
+        }
+
+    return [row_to_dict(r) for r in read_rows], [row_to_dict(r) for r in skip_rows]
+
+
+async def get_user_profile() -> str | None:
+    """Henter lagret brukerprofil."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT profile FROM user_profile WHERE id = 1")
+        return row["profile"] if row else None
+
+
+async def save_user_profile(profile: str):
+    """Lagrer oppdatert brukerprofil."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE user_profile SET profile = $1, updated_at = NOW() WHERE id = 1
+        """, profile)
+    logger.info(f"Brukerprofil oppdatert: {profile[:80]}...")
+
+
+async def save_ai_result(message_id: str, tldr: str, score: str, reason: str, auto_skip: bool):
+    """Lagrer AI-vurdering på en melding."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE messages SET
+                ai_tldr      = $1,
+                ai_score     = $2,
+                ai_reason    = $3,
+                ai_auto_skip = $4,
+                tldr         = COALESCE($1, tldr),
+                status       = CASE WHEN $4 = TRUE AND status = 'unread'
+                                    THEN 'skipped' ELSE status END,
+                updated_at   = NOW()
+            WHERE id = $5
+        """, tldr, score, reason, auto_skip, message_id)
+
+
+async def get_unprocessed_messages(limit: int = 20) -> list[dict]:
+    """Henter nye meldinger som ikke har fått AI-vurdering ennå."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, source, source_label, category, title, tldr, body
+            FROM messages
+            WHERE ai_score IS NULL
+            ORDER BY timestamp DESC
+            LIMIT $1
+        """, limit)
+    return [dict(r) for r in rows]

@@ -4,3 +4,4 @@ spond==1.1.1
 pydantic==2.9.0
 python-multipart==0.0.9
 asyncpg==0.29.0
+httpx==0.27.0
