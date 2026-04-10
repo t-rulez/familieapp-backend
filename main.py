@@ -207,6 +207,8 @@ async def register(req: RegisterRequest):
         raise HTTPException(status_code=403, detail="Maks antall brukere nådd")
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Passord må være minst 8 tegn")
+    if len(req.password.encode('utf-8')) > 72:
+        raise HTTPException(status_code=400, detail="Passord kan ikke være lengre enn 72 tegn")
     existing = await get_user_by_email(req.email)
     if existing:
         raise HTTPException(status_code=400, detail="E-postadressen er allerede i bruk")
