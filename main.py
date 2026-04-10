@@ -180,7 +180,7 @@ async def lifespan(app: FastAPI):
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Familie API")
+app = FastAPI(title="Familie API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
