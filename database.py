@@ -79,8 +79,8 @@ async def upsert_messages(messages: list[dict]):
                 result = await conn.execute("""
                     INSERT INTO messages
                         (id, source, source_label, category, title, tldr, body,
-                         time_label, timestamp, priority, status, meta)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
+                         time_label, timestamp, priority, status, meta, user_id)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
                     ON CONFLICT (id) DO UPDATE SET
                         title       = EXCLUDED.title,
                         tldr        = EXCLUDED.tldr,
@@ -88,6 +88,7 @@ async def upsert_messages(messages: list[dict]):
                         time_label  = EXCLUDED.time_label,
                         priority    = EXCLUDED.priority,
                         meta        = EXCLUDED.meta,
+                        user_id     = COALESCE(messages.user_id, EXCLUDED.user_id),
                         updated_at  = NOW()
                     -- status berøres IKKE – brukerens valg beholdes
                 """,
@@ -102,7 +103,8 @@ async def upsert_messages(messages: list[dict]):
                     ts or datetime.now(timezone.utc),
                     msg.get("priority", "medium"),
                     msg.get("status", "unread"),
-                    meta
+                    meta,
+                    msg.get("user_id")
                 )
                 if "INSERT 0 1" in result:
                     inserted += 1
