@@ -85,41 +85,39 @@ async def init_user_tables():
             ON user_profile(user_id) WHERE user_id IS NOT NULL
         """)
 
-    # Migrer eksisterende meldinger til første bruker
-    await _migrate_existing_data(conn)
-
     logger.info("Brukertabeller initialisert")
+    # Migrer eksisterende data i egen connection
+    await _migrate_existing_data()
 
 
-async def _migrate_existing_data(conn):
+async def _migrate_existing_data():
     """
     Knytter eksisterende meldinger og AI-profil til første bruker.
     Kjores automatisk ved oppstart – trygg a kjore flere ganger.
     """
-    # Finn første bruker
-    first_user = await conn.fetchrow(
-        "SELECT id FROM users ORDER BY created_at ASC LIMIT 1"
-    )
-    if not first_user:
-        return  # Ingen brukere ennå
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        first_user = await conn.fetchrow(
+            "SELECT id FROM users ORDER BY created_at ASC LIMIT 1"
+        )
+        if not first_user:
+            return
 
-    user_id = first_user["id"]
+        user_id = first_user["id"]
 
-    # Knytt meldinger uten user_id til første bruker
-    result = await conn.execute("""
-        UPDATE messages SET user_id = $1 WHERE user_id IS NULL
-    """, user_id)
-    count = int(result.split()[-1])
-    if count > 0:
-        logger.info(f"Migrerte {count} meldinger til bruker {user_id}")
+        result = await conn.execute("""
+            UPDATE messages SET user_id = $1 WHERE user_id IS NULL
+        """, user_id)
+        count = int(result.split()[-1])
+        if count > 0:
+            logger.info(f"Migrerte {count} meldinger til bruker {user_id}")
 
-    # Knytt AI-profil uten user_id til første bruker
-    await conn.execute("""
-        UPDATE user_profile SET user_id = $1
-        WHERE user_id IS NULL AND profile IS NOT NULL
-    """, user_id)
+        await conn.execute("""
+            UPDATE user_profile SET user_id = $1
+            WHERE user_id IS NULL AND profile IS NOT NULL
+        """, user_id)
 
-    logger.info(f"Migrering fullfort for bruker {user_id}")
+        logger.info(f"Migrering fullfort for bruker {user_id}")
 
 
 # ─── Bruker-CRUD ──────────────────────────────────────────────────────────────
