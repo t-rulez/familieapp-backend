@@ -163,10 +163,17 @@ async def sync_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Rekkefølge er viktig: basis -> AI -> brukere
-    await init_db()          # messages, user_profile (basis)
-    await init_ai_tables()   # AI-kolonner på messages
-    await init_user_tables() # users, user_settings, koble user_id
+    try:
+        logger.info("Starter init_db...")
+        await init_db()
+        logger.info("Starter init_ai_tables...")
+        await init_ai_tables()
+        logger.info("Starter init_user_tables...")
+        await init_user_tables()
+        logger.info("Alle tabeller initialisert OK")
+    except Exception as e:
+        logger.error(f"FATAL: Tabellinitialisering feilet: {e}", exc_info=True)
+        raise
     task = asyncio.create_task(sync_loop())
     yield
     task.cancel()
