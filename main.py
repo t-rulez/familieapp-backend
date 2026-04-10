@@ -279,3 +279,25 @@ async def email_config_status(x_api_token: Optional[str] = Header(None)):
             for c in configs
         ]
     }
+
+
+# ─── WhatsApp ingest-endepunkt ────────────────────────────────────────────────
+
+class IngestPayload(BaseModel):
+    messages: list[dict]
+
+
+@app.post("/messages/ingest")
+async def ingest_messages(payload: IngestPayload, x_api_token: Optional[str] = Header(None)):
+    """
+    Tar imot meldinger fra WhatsApp-tjenesten (eller andre kilder)
+    og lagrer dem direkte i databasen.
+    """
+    verify_token(x_api_token)
+    try:
+        await upsert_messages(payload.messages)
+        # Kjor AI i bakgrunnen
+        asyncio.create_task(run_ai_processing())
+        return {"ok": True, "count": len(payload.messages)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
