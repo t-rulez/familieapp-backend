@@ -344,3 +344,48 @@ async def get_unprocessed_messages(limit: int = 20, user_id: str = None) -> list
                 ORDER BY timestamp DESC LIMIT $1
             """, limit)
     return [dict(r) for r in rows]
+
+
+# ─── Push-abonnementer ────────────────────────────────────────────────────────
+
+async def init_push_tables():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id         TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                endpoint   TEXT NOT NULL UNIQUE,
+                p256dh     TEXT NOT NULL,
+                auth       TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+    logger.info("Push-tabeller initialisert")
+
+
+async def save_push_subscription(user_id: str, endpoint: str, p256dh: str, auth: str):
+    import uuid
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (endpoint) DO UPDATE SET
+                user_id = $2, p256dh = $4, auth = $5
+        """, str(uuid.uuid4()), user_id, endpoint, p256dh, auth)
+
+
+async def delete_push_subscription(endpoint: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM push_subscriptions WHERE endpoint = $1", endpoint)
+
+
+async def get_push_subscriptions(user_id: str) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1
+        """, user_id)
+    return [{"endpoint": r["endpoint"], "keys": {"p256dh": r["p256dh"], "auth": r["auth"]}} for r in rows]

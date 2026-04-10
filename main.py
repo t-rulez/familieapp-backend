@@ -12,11 +12,13 @@ from pydantic import BaseModel, EmailStr
 from spond_service import SpondService
 from email_service import EmailService
 from database import (
-    init_db, init_ai_tables,
+    init_db, init_ai_tables, init_push_tables,
     upsert_messages, get_all_messages, update_message_status,
     get_stats, get_classified_messages, get_user_profile,
-    save_user_profile, save_ai_result, get_unprocessed_messages
+    save_user_profile, save_ai_result, get_unprocessed_messages,
+    save_push_subscription, delete_push_subscription, get_push_subscriptions
 )
+from push_service import send_push_to_user
 from users import (
     init_user_tables, create_user, get_user_by_email, get_user_by_id,
     update_last_login, count_users, get_user_settings, get_user_settings_safe,
@@ -170,6 +172,8 @@ async def lifespan(app: FastAPI):
         await init_ai_tables()
         logger.info("Starter init_user_tables...")
         await init_user_tables()
+        logger.info("Starter init_push_tables...")
+        await init_push_tables()
         logger.info("Alle tabeller initialisert OK")
     except Exception as e:
         logger.error(f"FATAL: Tabellinitialisering feilet: {e}", exc_info=True)
@@ -347,3 +351,53 @@ async def ingest_messages(
     if payload.user_id:
         asyncio.create_task(run_ai_processing(payload.user_id))
     return {"ok": True, "count": len(payload.messages)}
+
+
+# ─── Push-abonnementer ────────────────────────────────────────────────────────
+
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict  # p256dh, auth
+
+@app.post("/push/subscribe")
+async def push_subscribe(sub: PushSubscription, user: CurrentUser):
+    await save_push_subscription(
+        user["id"],
+        sub.endpoint,
+        sub.keys.get("p256dh", ""),
+        sub.keys.get("auth", "")
+    )
+    return {"ok": True}
+
+@app.delete("/push/subscribe")
+async def push_unsubscribe(sub: PushSubscription, user: CurrentUser):
+    await delete_push_subscription(sub.endpoint)
+    return {"ok": True}
+
+@app.get("/push/vapid-key")
+async def get_vapid_key():
+    return {"publicKey": os.environ.get("VAPID_PUBLIC_KEY", "")}
+
+@app.post("/push/test")
+async def push_test(user: CurrentUser):
+    subs = await get_push_subscriptions(user["id"])
+    if not subs:
+        raise HTTPException(status_code=400, detail="Ingen push-abonnementer registrert")
+    await send_push_to_user(subs, "Familie 👋", "Push-varsler fungerer!", "test")
+    return {"ok": True, "sent_to": len(subs)}
+
+
+# ─── Send push ved nye meldinger (kalles etter synk) ─────────────────────────
+
+async def notify_new_messages(user_id: str, new_count: int):
+    if new_count <= 0:
+        return
+    try:
+        subs = await get_push_subscriptions(user_id)
+        if not subs:
+            return
+        title = f"{new_count} ny{'e' if new_count > 1 else ''} melding{'er' if new_count > 1 else ''}"
+        body  = "Trykk for å se hva som er nytt"
+        await send_push_to_user(subs, title, body, "new-messages")
+    except Exception as e:
+        logger.error(f"Push-varsling feilet: {e}")
