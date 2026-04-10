@@ -485,6 +485,7 @@ async def push_unsubscribe(sub: PushSubscription, user: CurrentUser):
 @app.delete("/push/all")
 async def push_unsubscribe_all(user: CurrentUser):
     """Sletter alle push-abonnementer for brukeren."""
+    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
