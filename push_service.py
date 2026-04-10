@@ -2,18 +2,35 @@ import os
 import json
 import logging
 import asyncio
+import base64
 from pywebpush import webpush, WebPushException
 
 logger = logging.getLogger(__name__)
 
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
-VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
-VAPID_EMAIL       = os.environ.get("VAPID_EMAIL", "mailto:admin@familie.app")
+VAPID_EMAIL = os.environ.get("VAPID_EMAIL", "mailto:admin@familie.app")
+
+
+def _get_private_key():
+    """Returnerer privat nøkkel i riktig format for pywebpush."""
+    key = VAPID_PRIVATE_KEY.strip()
+    if not key:
+        return None
+    # Hvis det er PEM-format, konverter til raw DER base64
+    if "BEGIN" in key:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key, Encoding, PrivateFormat, NoEncryption
+        pem = key.encode()
+        private_key = load_pem_private_key(pem, password=None)
+        der = private_key.private_bytes(Encoding.DER, PrivateFormat.PKCS8, NoEncryption())
+        return base64.urlsafe_b64encode(der).decode().rstrip('=')
+    return key
 
 
 async def send_push(subscription: dict, title: str, body: str, tag: str = "familie") -> bool:
     """Sender ett push-varsel til én enhet."""
-    if not VAPID_PRIVATE_KEY:
+    private_key = _get_private_key()
+    if not private_key:
         logger.warning("VAPID_PRIVATE_KEY ikke satt – push-varsler deaktivert")
         return False
     try:
@@ -22,7 +39,7 @@ async def send_push(subscription: dict, title: str, body: str, tag: str = "famil
             webpush,
             subscription_info=subscription,
             data=data,
-            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_private_key=private_key,
             vapid_claims={"sub": VAPID_EMAIL}
         )
         return True
