@@ -353,6 +353,70 @@ async def ingest_messages(
     return {"ok": True, "count": len(payload.messages)}
 
 
+# ─── WhatsApp proxy ──────────────────────────────────────────────────────────
+
+@app.get("/whatsapp/status")
+async def wa_status(user: CurrentUser):
+    """Proxy til WhatsApp-tjenesten – unngår CORS."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        return {"ready": False, "hasQr": False, "error": "WHATSAPP_SERVICE_URL ikke satt"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{wa_url}/")
+            return res.json()
+    except Exception as e:
+        return {"ready": False, "hasQr": False, "error": str(e)}
+
+@app.get("/whatsapp/qr")
+async def wa_qr(user: CurrentUser):
+    """Proxy QR-HTML fra WhatsApp-tjenesten."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        raise HTTPException(status_code=503, detail="WHATSAPP_SERVICE_URL ikke satt")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{wa_url}/qr")
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(content=res.text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+# ─── WhatsApp proxy ──────────────────────────────────────────────────────────
+
+@app.get("/whatsapp/status")
+async def whatsapp_status(user: CurrentUser):
+    """Proxy til WhatsApp-tjenesten for å unngå CORS."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        res = await client.get(f"{wa_url}/")
+        return res.json()
+
+@app.get("/whatsapp/qr")
+async def whatsapp_qr(user: CurrentUser):
+    """Proxy QR-kode fra WhatsApp-tjenesten."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        res = await client.get(f"{wa_url}/qr")
+        return {"html": res.text}
+
+@app.post("/whatsapp/logout")
+async def whatsapp_logout(user: CurrentUser):
+    """Logger ut av WhatsApp og sletter sesjonen."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        res = await client.post(f"{wa_url}/logout")
+        return res.json()
+
 # ─── Admin: opprydding ───────────────────────────────────────────────────────
 
 @app.post("/admin/fix-null-users")
