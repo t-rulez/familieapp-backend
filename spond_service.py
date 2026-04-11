@@ -15,15 +15,21 @@ class SpondService:
         s = spond_lib.Spond(username=self.username, password=self.password)
         
         try:
+            import time as _time
+            t0 = _time.time()
             await s.login()
+            print(f"Spond login: {_time.time()-t0:.1f}s")
             
             results = []
             now = datetime.now(timezone.utc)
             history_from = since if since else datetime(2026, 1, 1, tzinfo=timezone.utc)
+            print(f"Spond synk siden: {history_from.strftime('%Y-%m-%d %H:%M') if since else 'alt'}")
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
                 chats = await s.get_messages()
+                t1 = _time.time()
+                print(f"Spond get_messages: {t1-t0:.1f}s")
                 if chats:
                     print(f"Spond: fant {len(chats)} chatter")
                     seen_chat_ids = set()
@@ -72,8 +78,10 @@ class SpondService:
             # ── Hent arrangementer (historisk + fremtid) ──────────────────────
             try:
                 future = now + timedelta(days=90)
+                # Hvis since er satt, hent bare fremtidige arrangementer + siste 24t
+                event_from = history_from if not since else (since - timedelta(hours=24))
                 raw_events = await s.get_events(
-                    min_end=history_from,
+                    min_end=event_from,
                     max_start=future,
                     include_scheduled=True
                 )
