@@ -706,10 +706,16 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     if not relevant:
         relevant = all_msgs[:10]
 
-    msg_context = "\n\n".join([
-        f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]\nTittel: {m['title']}\n{m['tldr']}"
-        for m in relevant
-    ])
+    def format_msg(m):
+        parts = [f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]", f"Tittel: {m['title']}"]
+        if m.get('tldr'):
+            parts.append(f"Sammendrag: {m['tldr']}")
+        if m.get('body') and m['body'] != m.get('tldr',''):
+            body_preview = m['body'][:300] + ('...' if len(m['body']) > 300 else '')
+            parts.append(f"Innhold: {body_preview}")
+        return "\n".join(parts)
+
+    msg_context = "\n\n".join([format_msg(m) for m in relevant])
 
     family_section = f"FAMILIEPROFIL:\n{req.family_context}\n" if req.family_context else ""
     auto_section = f"LAERT KONTEKST:\n{req.auto_context}\n" if req.auto_context else ""
