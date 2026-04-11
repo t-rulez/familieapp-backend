@@ -40,6 +40,11 @@ class SpondService:
                                 chat_msgs = await r.json()
                             print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
                             if chat_msgs:
+                                first = chat_msgs[0] if chat_msgs else {}
+                                print(f"    Eksempel nøkler: {list(first.keys())[:8]}")
+                                print(f"    text: {str(first.get('text',''))[:80]}")
+                                print(f"    type: {first.get('type','?')}")
+                            if chat_msgs:
                                 for msg in chat_msgs:
                                     ts_str = msg.get("timestamp", "")
                                     if ts_str:
