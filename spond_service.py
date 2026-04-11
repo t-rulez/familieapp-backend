@@ -41,6 +41,9 @@ class SpondService:
                             ) as r:
                                 chat_msgs = await r.json()
                             print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
+                            # chat_msgs kan være en liste eller et dict
+                            if isinstance(chat_msgs, dict):
+                                chat_msgs = chat_msgs.get("messages", []) or []
                             if chat_msgs:
                                 for msg in chat_msgs:
                                     # Hopp over hvis msg ikke er en dict
