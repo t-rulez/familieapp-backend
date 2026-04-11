@@ -301,6 +301,7 @@ async def update_settings(updates: dict, user: CurrentUser):
 async def get_messages(user: CurrentUser):
     messages = await get_all_messages(user_id=user["id"])
     # Hent nyeste updated_at fra brukerens meldinger som "sist synkronisert"
+    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         newest = await conn.fetchval(
