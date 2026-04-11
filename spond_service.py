@@ -196,25 +196,15 @@ class SpondService:
             created_str = event.get("createdTime", start_str)
             created = self._parse_timestamp(created_str)
 
-            # Hent gruppenavn fra alle mulige felt i event-strukturen
+            # Hent gruppenavn fra recipients.group.name
+            recipients = event.get("recipients") or {}
+            group_obj = recipients.get("group") or {}
             group_name = (
                 event.get("groupName") or
                 (event.get("group") or {}).get("name") or
-                (event.get("recipients", {}).get("group") or {}).get("name") or
-                event.get("subGroups", [{}])[0].get("name") if event.get("subGroups") else None or
-                ""
+                group_obj.get("name") or
+                "Spond"
             )
-            if not group_name:
-                # Logg recipients-struktur for debugging
-                recipients = event.get("recipients", {})
-                if recipients:
-                    print(f"  recipients-nøkler: {list(recipients.keys())}")
-                    group = recipients.get("group", {})
-                    if group:
-                        print(f"  group-nøkler: {list(group.keys()) if isinstance(group, dict) else group}")
-                else:
-                    print(f"  Ingen recipients, nøkler: {list(event.keys())[:10]}")
-            group_name = group_name or "Spond"
             return {
                 "id": f"spond-event-{event_id}",
                 "source": "spond",
