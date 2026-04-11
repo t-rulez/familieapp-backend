@@ -504,8 +504,7 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
     if settings.get("spond_enabled"):
         try:
             from spond_service import SpondService
-            from users import get_decrypted_password
-            pw = await get_decrypted_password(user["id"], "spond")
+            pw = settings.get("spond_password", "")
             if pw and settings.get("spond_username"):
                 svc = SpondService(settings["spond_username"], pw)
                 msgs = await svc.fetch_all()
