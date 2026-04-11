@@ -73,7 +73,7 @@ class SpondService:
                 "id": f"spond-msg-{msg_id}",
                 "source": "spond",
                 "sourceLabel": "Spond",
-                "category": "idrett",
+                "category": group_name or "idrett",
                 "title": f"Melding fra {sender_name}" if sender_name else group_name,
                 "tldr": text[:120] + ("..." if len(text) > 120 else ""),
                 "body": text,
@@ -125,11 +125,12 @@ class SpondService:
             created_str = event.get("createdTime", start_str)
             created = self._parse_timestamp(created_str)
 
+            group_name = event.get("groupName", "") or event.get("group", {}).get("name", "") or "idrett"
             return {
                 "id": f"spond-event-{event_id}",
                 "source": "spond",
                 "sourceLabel": "Spond",
-                "category": "idrett",
+                "category": group_name,
                 "title": heading,
                 "tldr": " · ".join(tldr_parts),
                 "body": body,
@@ -141,7 +142,8 @@ class SpondService:
                     "eventStart": start.isoformat() if start else None,
                     "location": location_str,
                     "accepted": accepted,
-                    "declined": declined
+                    "declined": declined,
+                    "group": group_name
                 }
             }
         except Exception as e:

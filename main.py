@@ -447,6 +447,22 @@ async def fix_null_users(user: CurrentUser):
     count = int(result.split()[-1])
     return {"ok": True, "fixed": count}
 
+@app.post("/admin/fix-spond-categories")
+async def fix_spond_categories(user: CurrentUser):
+    """Oppdaterer category på Spond-meldinger til gruppenavn fra meta."""
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE messages
+            SET category = meta->>'group'
+            WHERE source = 'spond'
+              AND meta->>'group' IS NOT NULL
+              AND meta->>'group' != ''
+        """)
+    count = int(result.split()[-1])
+    return {"ok": True, "updated": count}
+
 @app.post("/admin/fix-whatsapp-categories")
 async def fix_whatsapp_categories(user: CurrentUser):
     """Oppdaterer category på WhatsApp-meldinger til gruppenavn fra meta."""
