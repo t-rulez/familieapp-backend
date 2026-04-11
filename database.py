@@ -228,16 +228,19 @@ async def init_ai_tables():
         # Brukerprofil-tabell
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_profile (
-                id          INTEGER PRIMARY KEY DEFAULT 1,
+                id          SERIAL PRIMARY KEY,
+                user_id     TEXT UNIQUE,
                 profile     TEXT,
-                updated_at  TIMESTAMPTZ DEFAULT NOW(),
-                CONSTRAINT single_row CHECK (id = 1)
+                updated_at  TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Legg til user_id kolonne hvis den mangler (migrering)
         await conn.execute("""
-            INSERT INTO user_profile (id, profile)
-            VALUES (1, NULL)
-            ON CONFLICT (id) DO NOTHING
+            ALTER TABLE user_profile ADD COLUMN IF NOT EXISTS user_id TEXT
+        """)
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS user_profile_user_id_idx
+            ON user_profile (user_id) WHERE user_id IS NOT NULL
         """)
     logger.info("AI-tabeller initialisert")
 
