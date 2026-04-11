@@ -205,8 +205,15 @@ class SpondService:
                 ""
             )
             if not group_name:
-                # Logg struktur for debugging
-                print(f"  Mangler gruppenavn, event-nøkler: {list(event.keys())[:10]}")
+                # Logg recipients-struktur for debugging
+                recipients = event.get("recipients", {})
+                if recipients:
+                    print(f"  recipients-nøkler: {list(recipients.keys())}")
+                    group = recipients.get("group", {})
+                    if group:
+                        print(f"  group-nøkler: {list(group.keys()) if isinstance(group, dict) else group}")
+                else:
+                    print(f"  Ingen recipients, nøkler: {list(event.keys())[:10]}")
             group_name = group_name or "Spond"
             return {
                 "id": f"spond-event-{event_id}",
