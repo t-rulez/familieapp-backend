@@ -521,12 +521,28 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
     from email_service import EmailService, get_email_config
     from users import get_user_email_configs
 
-    email_configs = await get_user_email_configs(user["id"])
-    for idx, cfg in enumerate(email_configs, 1):
-        if not cfg.get("enabled"):
+    # Bygg e-postkonfig fra brukerinnstillinger
+    from users import get_decrypted_password
+    for idx in [1, 2]:
+        enabled = settings.get(f"email_{idx}_enabled")
+        host = settings.get(f"email_{idx}_host")
+        if not enabled or not host:
             continue
         try:
-            svc = EmailService(cfg)
+            pw = await get_decrypted_password(user["id"], f"email_{idx}")
+            email_cfg = {
+                "host": host,
+                "port": settings.get(f"email_{idx}_port", 993),
+                "username": settings.get(f"email_{idx}_username", ""),
+                "password": pw or "",
+                "from_filter": settings.get(f"email_{idx}_from_filter", ""),
+                "subject_filter": settings.get(f"email_{idx}_subject_filter", ""),
+                "delete_after_fetch": False,  # Aldri slett ved historisk henting
+                "source_label": settings.get(f"email_{idx}_source_label", "Skolemelding"),
+                "source": settings.get(f"email_{idx}_source", "skolemelding"),
+                "category": settings.get(f"email_{idx}_category", "skole"),
+            }
+            svc = EmailService(email_cfg)
             msgs = await asyncio.to_thread(svc.fetch_history, from_dt)
             for m in msgs:
                 m["user_id"] = user["id"]
