@@ -124,7 +124,11 @@ class SpondService:
                 category = chat_name or "Spond"
                 title = club_info.get("subject") or text[:80]
                 sender_name = club_info.get("senderName") or club_info.get("clubName", chat_name)
-                body_text = club_info.get("message") or text
+                raw_body = club_info.get("message") or text
+                # Strip HTML-tagger
+                import re
+                body_text = re.sub(r'<[^>]+>', ' ', raw_body).strip()
+                body_text = re.sub(r'\s+', ' ', body_text).strip()
 
             elif msg_type in ("TEXT", "SPOND"):
                 # Direkte melding eller gruppechat

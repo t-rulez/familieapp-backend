@@ -130,16 +130,30 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             all_messages.extend(r)
 
     from database import count_unread_messages
-    before = await count_unread_messages(user_id)
+    inserted_ids = [m["id"] for m in all_messages]
     await upsert_messages(all_messages)
-    after = await count_unread_messages(user_id)
-    new_count = after - before
 
-    asyncio.create_task(run_ai_processing(user_id))
-    if new_count > 0:
-        asyncio.create_task(notify_new_messages(user_id, new_count))
+    if inserted_ids:
+        asyncio.create_task(_ai_then_notify(user_id, inserted_ids))
 
     return len(all_messages)
+
+
+async def _ai_then_notify(user_id: str, inserted_ids: list):
+    """Kjør AI-behandling, send push kun for nye meldinger AI beholdt som uleste."""
+    await run_ai_processing(user_id)
+    # Tell hvor mange av de nye meldingene som fortsatt er uleste etter AI
+    if not inserted_ids:
+        return
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM messages WHERE id = ANY($1::text[]) AND status = 'unread'",
+            inserted_ids
+        )
+    if count and count > 0:
+        await notify_new_messages(user_id, count)
 
 
 def _build_email_config(user: dict, num: int) -> dict:
