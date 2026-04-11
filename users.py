@@ -61,6 +61,8 @@ async def init_user_tables():
                 wa_category           TEXT DEFAULT 'foreldre',
                 wa_source_label       TEXT DEFAULT 'WhatsApp',
                 wa_enabled            BOOLEAN DEFAULT FALSE,
+                family_context        TEXT DEFAULT '',
+                ai_learned_context    TEXT DEFAULT '',
                 updated_at            TIMESTAMPTZ DEFAULT NOW()
             )
         """)

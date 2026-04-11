@@ -273,7 +273,8 @@ async def update_settings(updates: dict, user: CurrentUser):
         "email_2_host", "email_2_port", "email_2_username", "email_2_password",
         "email_2_from_filter", "email_2_subject_filter", "email_2_delete_after",
         "email_2_source_label", "email_2_source", "email_2_category", "email_2_enabled",
-        "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled"
+        "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
+        "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
     await update_user_settings(user["id"], filtered)
@@ -557,3 +558,85 @@ async def notify_new_messages(user_id: str, new_count: int):
         await send_push_to_user(subs, title, body, "new-messages")
     except Exception as e:
         logger.error(f"Push-varsling feilet: {e}")
+
+
+# ─── AI Chat proxy ────────────────────────────────────────────────────────────
+
+class AiChatRequest(BaseModel):
+    question: str
+    family_context: str = ""
+    auto_context: str = ""
+    history: list[dict] = []
+
+@app.post("/ai/chat")
+async def ai_chat(req: AiChatRequest, user: CurrentUser):
+    import httpx
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI ikke konfigurert")
+
+    all_msgs = await get_all_messages(user_id=user["id"], limit=500)
+    words = [w.lower() for w in req.question.split() if len(w) > 2]
+
+    def score_msg(m):
+        text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
+        return sum(1 for w in words if w in text)
+
+    relevant = sorted(all_msgs, key=score_msg, reverse=True)[:25]
+    relevant = [m for m in relevant if score_msg(m) > 0] or all_msgs[:10]
+
+    msg_context = "\n\n".join([
+        f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]\nTittel: {m['title']}\n{m['tldr']}"
+        for m in relevant
+    ])
+
+    family_section = f"FAMILIEPROFIL:\n{req.family_context}\n" if req.family_context else ""
+    auto_section = f"LAERT KONTEKST:\n{req.auto_context}\n" if req.auto_context else ""
+
+    system = (
+        "Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger.\n"
+        "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
+        + family_section
+        + auto_section
+        + "RELEVANTE MELDINGER:\n"
+        + msg_context
+    )
+
+    messages = [
+        m for m in req.history[-6:]
+        if m.get("role") in ("user", "assistant") and "⏳" not in m.get("content", "")
+    ]
+    messages.append({"role": "user", "content": req.question})
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        res = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 800, "system": system, "messages": messages}
+        )
+        data = res.json()
+
+    answer = data.get("content", [{}])[0].get("text", "Beklager, noe gikk galt.")
+    return {"answer": answer}
+
+
+@app.post("/ai/learn")
+async def ai_learn(req: dict, user: CurrentUser):
+    import httpx
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"learned": ""}
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        res = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 150,
+                "system": "Trekk ut ny personkontekst fra spoersmaal og svar. Returner BARE en kort setning med ny info om person/lag/aktivitet, eller tom streng hvis ingen ny info. Maks 100 tegn. Eksempel: 'Gustav: G2015, Ready Rod, fotball'",
+                "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
+            }
+        )
+    learned = res.json().get("content", [{}])[0].get("text", "").strip()
+    return {"learned": learned}
