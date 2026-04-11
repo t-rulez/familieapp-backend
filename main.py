@@ -300,7 +300,14 @@ async def update_settings(updates: dict, user: CurrentUser):
 @app.get("/messages")
 async def get_messages(user: CurrentUser):
     messages = await get_all_messages(user_id=user["id"])
-    return {"messages": messages, "last_sync": last_sync, "count": len(messages)}
+    # Hent nyeste updated_at fra brukerens meldinger som "sist synkronisert"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        newest = await conn.fetchval(
+            "SELECT MAX(updated_at) FROM messages WHERE user_id = $1", user["id"]
+        )
+    user_last_sync = newest.isoformat() if newest else last_sync
+    return {"messages": messages, "last_sync": user_last_sync, "count": len(messages)}
 
 class StatusUpdate(BaseModel):
     status: str
