@@ -122,6 +122,15 @@ class SpondService:
                 category = chat_name or "Spond"
                 title = text[:80] + ("..." if len(text) > 80 else "")
                 sender_name = club_info.get("clubName", chat_name)
+                # Hent full meldingstekst fra clubMessage hvis tilgjengelig
+                body_text = (
+                    club_info.get("body") or
+                    club_info.get("content") or
+                    club_info.get("message") or
+                    club_info.get("text") or
+                    text
+                )
+                print(f"  CLUB_MESSAGE nøkler: {list(club_info.keys())[:8]}")
 
             elif msg_type in ("TEXT", "SPOND"):
                 # Direkte melding eller gruppechat
@@ -142,6 +151,8 @@ class SpondService:
                 title = text[:80]
                 sender_name = ""
 
+            # For CLUB_MESSAGE, bruk body_text hvis tilgjengelig
+            final_body = body_text if msg_type == "CLUB_MESSAGE" and 'body_text' in dir() else text
             return {
                 "id": f"spond-msg-{msg_id}",
                 "source": "spond",
@@ -149,7 +160,7 @@ class SpondService:
                 "category": category,
                 "title": title,
                 "tldr": text[:120] + ("..." if len(text) > 120 else ""),
-                "body": text,
+                "body": final_body,
                 "time": self._format_relative_time(timestamp),
                 "timestamp": timestamp.isoformat(),
                 "priority": "medium",
