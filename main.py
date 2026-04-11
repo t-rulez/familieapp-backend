@@ -519,14 +519,13 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
 
     # ── E-post (Skolemelding + Showbie) ────────────────────────────────────────
     from email_service import EmailService
-    from users import get_decrypted_password
     for idx in [1, 2]:
         enabled = settings.get(f"email_{idx}_enabled")
         host = settings.get(f"email_{idx}_host")
         if not enabled or not host:
             continue
         try:
-            pw = await get_decrypted_password(user["id"], f"email_{idx}")
+            pw = settings.get(f"email_{idx}_password", "")
             email_cfg = {
                 "host": host,
                 "port": settings.get(f"email_{idx}_port", 993),
