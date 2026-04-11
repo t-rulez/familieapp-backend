@@ -24,11 +24,13 @@ class SpondService:
                 chats = await s.get_messages()
                 if chats:
                     print(f"Spond: fant {len(chats)} chatter")
+                    seen_chat_ids = set()
                     for chat in chats:
                         chat_id = chat.get("id", "")
                         chat_name = chat.get("name", "ukjent")
-                        if not chat_id:
+                        if not chat_id or chat_id in seen_chat_ids:
                             continue
+                        seen_chat_ids.add(chat_id)
                         # Hent meldinger per chat via direkte API-kall
                         try:
                             url = f"{s._chat_url}/chats/{chat_id}/messages/?max=50"
