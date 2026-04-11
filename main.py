@@ -470,6 +470,94 @@ async def fix_null_users(user: CurrentUser):
     count = int(result.split()[-1])
     return {"ok": True, "fixed": count}
 
+@app.post("/whatsapp/fetch-history")
+async def whatsapp_fetch_history(user: CurrentUser):
+    """Trigger historisk henting fra WhatsApp-tjenesten."""
+    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    if not wa_url:
+        raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
+    import httpx
+    async with httpx.AsyncClient(timeout=300) as client:
+        res = await client.post(f"{wa_url}/fetch-history")
+        return res.json()
+
+
+class FetchHistoryRequest(BaseModel):
+    from_date: str = "2026-01-01"  # ISO format YYYY-MM-DD
+
+@app.post("/fetch-history")
+async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
+    """Henter historiske meldinger fra alle aktive kilder."""
+    from datetime import datetime, timezone
+    from users import get_user_settings
+
+    try:
+        from_dt = datetime.fromisoformat(req.from_date).replace(tzinfo=timezone.utc)
+    except Exception:
+        from_dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    settings = await get_user_settings(user["id"])
+    results = {"spond": 0, "whatsapp": 0, "email1": 0, "email2": 0, "errors": []}
+    all_messages = []
+
+    # ── Spond ──────────────────────────────────────────────────────────────────
+    if settings.get("spond_enabled"):
+        try:
+            from spond_service import SpondService
+            from users import get_decrypted_password
+            pw = await get_decrypted_password(user["id"], "spond")
+            if pw and settings.get("spond_username"):
+                svc = SpondService(settings["spond_username"], pw)
+                msgs = await svc.fetch_all()
+                # fetch_all already filters from history_from in spond_service
+                for m in msgs:
+                    m["user_id"] = user["id"]
+                all_messages.extend(msgs)
+                results["spond"] = len(msgs)
+        except Exception as e:
+            results["errors"].append(f"Spond: {str(e)}")
+
+    # ── E-post (Skolemelding + Showbie) ────────────────────────────────────────
+    from email_service import EmailService, get_email_config
+    from users import get_user_email_configs
+
+    email_configs = await get_user_email_configs(user["id"])
+    for idx, cfg in enumerate(email_configs, 1):
+        if not cfg.get("enabled"):
+            continue
+        try:
+            svc = EmailService(cfg)
+            msgs = await asyncio.to_thread(svc.fetch_history, from_dt)
+            for m in msgs:
+                m["user_id"] = user["id"]
+            all_messages.extend(msgs)
+            results[f"email{idx}"] = len(msgs)
+        except Exception as e:
+            results["errors"].append(f"E-post {idx}: {str(e)}")
+
+    # ── WhatsApp ───────────────────────────────────────────────────────────────
+    if settings.get("wa_enabled"):
+        wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+        if wa_url:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=300) as client:
+                    res = await client.post(
+                        f"{wa_url}/fetch-history",
+                        json={"from_date": req.from_date, "user_id": user["id"]}
+                    )
+                    wa_result = res.json()
+                    results["whatsapp"] = wa_result.get("count", 0)
+            except Exception as e:
+                results["errors"].append(f"WhatsApp: {str(e)}")
+
+    # Lagre alle meldinger
+    if all_messages:
+        await upsert_messages(all_messages)
+
+    total = results["spond"] + results["email1"] + results["email2"] + results["whatsapp"]
+    return {"ok": True, "total": total, "details": results}
+
 @app.post("/admin/fix-spond-categories")
 async def fix_spond_categories(user: CurrentUser):
     """Oppdaterer category på Spond-meldinger til gruppenavn fra meta."""
@@ -597,15 +685,26 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     if not api_key:
         raise HTTPException(status_code=503, detail="AI ikke konfigurert")
 
-    all_msgs = await get_all_messages(user_id=user["id"], limit=500)
+    all_msgs = await get_all_messages(user_id=user["id"], limit=1000)
     words = [w.lower() for w in req.question.split() if len(w) > 2]
 
+    def get_text(m):
+        meta = m.get('meta') or {}
+        return f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')} {meta.get('group','')} {meta.get('sender','')}".lower()
+
+    def has_match(m):
+        text = get_text(m)
+        return any(w in text for w in words)
+
     def score_msg(m):
-        text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
+        text = get_text(m)
         return sum(1 for w in words if w in text)
 
-    relevant = sorted(all_msgs, key=score_msg, reverse=True)[:25]
-    relevant = [m for m in relevant if score_msg(m) > 0] or all_msgs[:10]
+    # Inkluder ALLE meldinger der minst ett søkeord finnes
+    relevant = [m for m in all_msgs if has_match(m)]
+    relevant = sorted(relevant, key=score_msg, reverse=True)[:50]
+    if not relevant:
+        relevant = all_msgs[:10]
 
     msg_context = "\n\n".join([
         f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]\nTittel: {m['title']}\n{m['tldr']}"

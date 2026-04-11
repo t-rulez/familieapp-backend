@@ -122,6 +122,50 @@ class EmailService:
 
         return messages
 
+    def fetch_history(self, from_date: datetime) -> list[dict]:
+        """Henter historiske e-poster siden from_date. Sletter aldri e-poster."""
+        messages = []
+        date_str = from_date.strftime("%d-%b-%Y")  # IMAP format: 01-Jan-2026
+
+        try:
+            mail = imaplib.IMAP4_SSL(self.config["host"], self.config["port"])
+            mail.login(self.config["username"], self.config["password"])
+            mail.select("INBOX")
+
+            # Bygg søk med dato-filter
+            criteria_parts = [f'SINCE {date_str}']
+            if self.config["from_filter"]:
+                criteria_parts.append(f'FROM "{self.config["from_filter"]}"')
+            if self.config["subject_filter"]:
+                criteria_parts.append(f'SUBJECT "{self.config["subject_filter"]}"')
+
+            criteria = " ".join(criteria_parts)
+            logger.info(f"Historisk IMAP-søk: {criteria}")
+
+            _, message_ids = mail.search(None, criteria)
+            ids = message_ids[0].split()
+            logger.info(f"Fant {len(ids)} historiske e-poster")
+
+            for msg_id in ids:
+                try:
+                    _, msg_data = mail.fetch(msg_id, "(RFC822)")
+                    raw = msg_data[0][1]
+                    msg = email.message_from_bytes(raw)
+                    normalized = self._normalize_email(msg)
+                    if normalized:
+                        if self._passes_filters(normalized["_from_raw"], normalized["_subject_raw"]):
+                            normalized.pop("_from_raw", None)
+                            normalized.pop("_subject_raw", None)
+                            messages.append(normalized)
+                except Exception as e:
+                    logger.error(f"Feil ved henting av historisk e-post {msg_id}: {e}")
+
+            mail.logout()
+        except Exception as e:
+            logger.error(f"Historisk IMAP-feil: {e}")
+
+        return messages
+
     def _build_search_criteria(self) -> str:
         """Bygger IMAP-søkestreng basert på filtre."""
         criteria = []
