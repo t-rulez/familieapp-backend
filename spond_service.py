@@ -27,17 +27,12 @@ class SpondService:
                 if chats:
                     print(f"Spond: fant {len(chats)} chatter")
                     seen_chat_ids = set()
-                    # Filtrer bort arrangement-notifikasjonschatter
-                    SKIP_NAMES = {"ready idrettsforening", "ukjent", ""}
                     for chat in chats:
                         chat_id = chat.get("id", "")
-                        chat_name = chat.get("name", "") or "ukjent"
+                        chat_name = chat.get("name", "") or ""
                         if not chat_id or chat_id in seen_chat_ids:
                             continue
                         seen_chat_ids.add(chat_id)
-                        # Hopp over generiske arrangement-chatter
-                        if chat_name.lower() in SKIP_NAMES:
-                            continue
                         # Hent meldinger per chat via direkte API-kall
                         try:
                             url = f"{s._chat_url}/chats/{chat_id}/messages/?max=50"
