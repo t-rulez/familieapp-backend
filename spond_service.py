@@ -21,25 +21,37 @@ class SpondService:
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
-                raw_messages = await s.get_messages()
-                if raw_messages:
-                    print(f"Spond: fant {len(raw_messages)} chatter")
-                    for chat in raw_messages:
+                chats = await s.get_messages()
+                if chats:
+                    print(f"Spond: fant {len(chats)} chatter")
+                    for chat in chats:
+                        chat_id = chat.get("id", "")
                         chat_name = chat.get("name", "ukjent")
-                        msgs_in_chat = chat.get("messages", [])
-                        print(f"  Chat '{chat_name}': {len(msgs_in_chat)} meldinger")
-                        for msg in msgs_in_chat:
-                            ts_str = msg.get("timestamp", "")
-                            if ts_str:
-                                try:
-                                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                                    if ts < history_from:
-                                        continue
-                                except Exception:
-                                    pass
-                            normalized = self._normalize_message(msg, chat)
-                            if normalized:
-                                results.append(normalized)
+                        if not chat_id:
+                            continue
+                        # Hent meldinger per chat via direkte API-kall
+                        try:
+                            url = f"{s._chat_url}/chats/{chat_id}/messages/?max=50"
+                            async with s.clientsession.get(
+                                url, headers={"auth": s._auth}
+                            ) as r:
+                                chat_msgs = await r.json()
+                            print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
+                            if chat_msgs:
+                                for msg in chat_msgs:
+                                    ts_str = msg.get("timestamp", "")
+                                    if ts_str:
+                                        try:
+                                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                            if ts < history_from:
+                                                continue
+                                        except Exception:
+                                            pass
+                                    normalized = self._normalize_message(msg, chat)
+                                    if normalized:
+                                        results.append(normalized)
+                        except Exception as e:
+                            print(f"  Feil ved henting av meldinger fra '{chat_name}': {e}")
                 else:
                     print("Spond: ingen chatter funnet")
             except Exception as e:
