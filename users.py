@@ -63,6 +63,7 @@ async def init_user_tables():
                 wa_enabled            BOOLEAN DEFAULT FALSE,
                 family_context        TEXT DEFAULT '',
                 ai_learned_context    TEXT DEFAULT '',
+                ai_chat_history       TEXT DEFAULT '[]',
                 updated_at            TIMESTAMPTZ DEFAULT NOW()
             )
         """)

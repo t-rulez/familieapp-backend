@@ -162,26 +162,7 @@ class SpondService:
             return datetime.now(timezone.utc)
 
     def _format_relative_time(self, dt: datetime) -> str:
-        """Formaterer dato relativt til nå (f.eks. '2 timer siden')."""
-        now = datetime.now(timezone.utc)
+        """Formaterer dato/tid som absolutt verdi, f.eks. '7. apr 14:32'."""
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        
-        diff = now - dt
-        seconds = diff.total_seconds()
-
-        if seconds < 60:
-            return "nå nettopp"
-        elif seconds < 3600:
-            mins = int(seconds / 60)
-            return f"{mins} min siden"
-        elif seconds < 86400:
-            hours = int(seconds / 3600)
-            return f"{hours} t siden"
-        elif seconds < 86400 * 2:
-            return "i går"
-        elif seconds < 86400 * 7:
-            days = int(seconds / 86400)
-            return f"{days} dager siden"
-        else:
-            return dt.strftime("%-d. %b")
+        return dt.strftime("%-d. %b %H:%M")

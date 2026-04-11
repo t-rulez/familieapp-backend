@@ -294,22 +294,7 @@ class EmailService:
         return "\n".join(result).strip()
 
     def _format_relative_time(self, dt: datetime) -> str:
-        """Formaterer dato relativt til nå."""
-        now = datetime.now(timezone.utc)
+        """Formaterer dato/tid som absolutt verdi, f.eks. '7. apr 14:32'."""
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        diff = now - dt
-        seconds = diff.total_seconds()
-
-        if seconds < 60:
-            return "nå nettopp"
-        elif seconds < 3600:
-            return f"{int(seconds / 60)} min siden"
-        elif seconds < 86400:
-            return f"{int(seconds / 3600)} t siden"
-        elif seconds < 86400 * 2:
-            return "i går"
-        elif seconds < 86400 * 7:
-            return f"{int(seconds / 86400)} dager siden"
-        else:
-            return dt.strftime("%-d. %b")
+        return dt.strftime("%-d. %b %H:%M")

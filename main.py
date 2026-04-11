@@ -357,14 +357,36 @@ async def ingest_messages(
     expected = os.environ.get("API_TOKEN")
     if expected and x_api_token != expected:
         raise HTTPException(status_code=401, detail="Ugyldig token")
+
+    # Finn første bruker hvis user_id ikke er satt
+    resolved_user_id = payload.user_id
+    if not resolved_user_id:
+        from database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+        if row:
+            resolved_user_id = str(row["id"])
+
     for msg in payload.messages:
-        if payload.user_id:
-            msg["user_id"] = payload.user_id
+        if resolved_user_id:
+            msg["user_id"] = resolved_user_id
         # Sett category til gruppenavn for WhatsApp-meldinger
         if msg.get("source") == "whatsapp":
             group = (msg.get("meta") or {}).get("group", "")
             if group:
                 msg["category"] = group
+        # Fiks time_label hvis den er tom eller generisk
+        if not msg.get("time") or msg.get("time") in ("nå nettopp", ""):
+            from datetime import timezone
+            ts = msg.get("timestamp")
+            if ts:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    msg["time"] = dt.strftime("%-d. %b %H:%M")
+                except Exception:
+                    pass
     await upsert_messages(payload.messages)
     if payload.user_id:
         asyncio.create_task(run_ai_processing(payload.user_id))
@@ -640,3 +662,29 @@ async def ai_learn(req: dict, user: CurrentUser):
         )
     learned = res.json().get("content", [{}])[0].get("text", "").strip()
     return {"learned": learned}
+
+
+# ─── AI historikk ─────────────────────────────────────────────────────────────
+
+@app.get("/ai/history")
+async def get_ai_history(user: CurrentUser):
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT ai_chat_history FROM user_settings WHERE user_id = $1", user["id"]
+        )
+    import json
+    history = json.loads(row["ai_chat_history"]) if row and row["ai_chat_history"] else []
+    return {"history": history}
+
+@app.post("/ai/history")
+async def save_ai_history(payload: dict, user: CurrentUser):
+    from database import get_pool
+    import json
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE user_settings SET ai_chat_history = $1 WHERE user_id = $2
+        """, json.dumps(payload.get("history", [])), user["id"])
+    return {"ok": True}
