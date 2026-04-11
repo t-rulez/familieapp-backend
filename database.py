@@ -82,14 +82,16 @@ async def upsert_messages(messages: list[dict]):
                          time_label, timestamp, priority, status, meta, user_id)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13)
                     ON CONFLICT (id) DO UPDATE SET
-                        title       = EXCLUDED.title,
-                        tldr        = EXCLUDED.tldr,
-                        body        = EXCLUDED.body,
-                        time_label  = EXCLUDED.time_label,
-                        priority    = EXCLUDED.priority,
-                        meta        = EXCLUDED.meta,
-                        user_id     = COALESCE(messages.user_id, EXCLUDED.user_id),
-                        updated_at  = NOW()
+                        title        = EXCLUDED.title,
+                        tldr         = EXCLUDED.tldr,
+                        body         = EXCLUDED.body,
+                        time_label   = EXCLUDED.time_label,
+                        priority     = EXCLUDED.priority,
+                        meta         = EXCLUDED.meta,
+                        source_label = EXCLUDED.source_label,
+                        category     = EXCLUDED.category,
+                        user_id      = COALESCE(messages.user_id, EXCLUDED.user_id),
+                        updated_at   = NOW()
                     -- status berøres IKKE – brukerens valg beholdes
                 """,
                     msg["id"],
