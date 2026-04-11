@@ -359,6 +359,11 @@ async def ingest_messages(
     for msg in payload.messages:
         if payload.user_id:
             msg["user_id"] = payload.user_id
+        # Sett category til gruppenavn for WhatsApp-meldinger
+        if msg.get("source") == "whatsapp":
+            group = (msg.get("meta") or {}).get("group", "")
+            if group:
+                msg["category"] = group
     await upsert_messages(payload.messages)
     if payload.user_id:
         asyncio.create_task(run_ai_processing(payload.user_id))
@@ -441,6 +446,22 @@ async def fix_null_users(user: CurrentUser):
         """, user["id"])
     count = int(result.split()[-1])
     return {"ok": True, "fixed": count}
+
+@app.post("/admin/fix-whatsapp-categories")
+async def fix_whatsapp_categories(user: CurrentUser):
+    """Oppdaterer category på WhatsApp-meldinger til gruppenavn fra meta."""
+    from database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE messages
+            SET category = meta->>'group'
+            WHERE source = 'whatsapp'
+              AND meta->>'group' IS NOT NULL
+              AND meta->>'group' != ''
+        """)
+    count = int(result.split()[-1])
+    return {"ok": True, "updated": count}
 
 @app.post("/admin/fix-categories")
 async def fix_categories(user: CurrentUser):
