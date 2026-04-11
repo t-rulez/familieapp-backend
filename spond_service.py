@@ -16,25 +16,40 @@ class SpondService:
             await s.login()
             
             results = []
-            
+            now = datetime.now(timezone.utc)
+            history_from = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
                 raw_messages = await s.get_messages()
                 if raw_messages:
+                    print(f"Spond: fant {len(raw_messages)} chatter")
                     for chat in raw_messages:
-                        for msg in chat.get("messages", []):
+                        chat_name = chat.get("name", "ukjent")
+                        msgs_in_chat = chat.get("messages", [])
+                        print(f"  Chat '{chat_name}': {len(msgs_in_chat)} meldinger")
+                        for msg in msgs_in_chat:
+                            ts_str = msg.get("timestamp", "")
+                            if ts_str:
+                                try:
+                                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                    if ts < history_from:
+                                        continue
+                                except Exception:
+                                    pass
                             normalized = self._normalize_message(msg, chat)
                             if normalized:
                                 results.append(normalized)
+                else:
+                    print("Spond: ingen chatter funnet")
             except Exception as e:
                 print(f"Kunne ikke hente meldinger: {e}")
 
-            # ── Hent kommende arrangementer ───────────────────────────────────
+            # ── Hent arrangementer (historisk + fremtid) ──────────────────────
             try:
-                now = datetime.now(timezone.utc)
-                future = now + timedelta(days=60)
+                future = now + timedelta(days=90)
                 raw_events = await s.get_events(
-                    min_end=now,
+                    min_end=history_from,
                     max_start=future,
                     include_scheduled=True
                 )
