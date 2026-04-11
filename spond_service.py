@@ -41,9 +41,11 @@ class SpondService:
                             ) as r:
                                 chat_msgs = await r.json()
                             print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
-                            # chat_msgs kan være en liste eller et dict
+                            # chat_msgs kan være en liste, dict eller noe annet
                             if isinstance(chat_msgs, dict):
                                 chat_msgs = chat_msgs.get("messages", []) or []
+                            elif not isinstance(chat_msgs, list):
+                                chat_msgs = []
                             if chat_msgs:
                                 for msg in chat_msgs:
                                     # Hopp over hvis msg ikke er en dict
@@ -120,17 +122,9 @@ class SpondService:
                 club_info = msg.get("clubMessage", {}) or {}
                 source_label = "Melding"
                 category = chat_name or "Spond"
-                title = text[:80] + ("..." if len(text) > 80 else "")
-                sender_name = club_info.get("clubName", chat_name)
-                # Hent full meldingstekst fra clubMessage hvis tilgjengelig
-                body_text = (
-                    club_info.get("body") or
-                    club_info.get("content") or
-                    club_info.get("message") or
-                    club_info.get("text") or
-                    text
-                )
-                print(f"  CLUB_MESSAGE nøkler: {list(club_info.keys())[:8]}")
+                title = club_info.get("subject") or text[:80]
+                sender_name = club_info.get("senderName") or club_info.get("clubName", chat_name)
+                body_text = club_info.get("message") or text
 
             elif msg_type in ("TEXT", "SPOND"):
                 # Direkte melding eller gruppechat
@@ -152,7 +146,7 @@ class SpondService:
                 sender_name = ""
 
             # For CLUB_MESSAGE, bruk body_text hvis tilgjengelig
-            final_body = body_text if msg_type == "CLUB_MESSAGE" and 'body_text' in dir() else text
+            final_body = body_text if msg_type == "CLUB_MESSAGE" else text
             return {
                 "id": f"spond-msg-{msg_id}",
                 "source": "spond",
