@@ -697,26 +697,49 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     if not api_key:
         raise HTTPException(status_code=503, detail="AI ikke konfigurert")
 
-    all_msgs = await get_all_messages(user_id=user["id"], limit=1000)
     words = [w.lower() for w in req.question.split() if len(w) > 2]
 
-    def get_text(m):
-        meta = m.get('meta') or {}
-        return f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')} {meta.get('group','')} {meta.get('sender','')}".lower()
+    from database import get_pool
+    import json as _json
+    pool = await get_pool()
+    seen_ids = set()
+    relevant = []
 
-    def has_match(m):
-        text = get_text(m)
-        return any(w in text for w in words)
+    if words:
+        sql = (
+            "SELECT id, source, source_label, category, title, tldr, body,"
+            " time_label AS time, timestamp, priority, status, meta"
+            " FROM messages"
+            " WHERE user_id = $1"
+            " AND (LOWER(title) LIKE $2"
+            " OR LOWER(tldr) LIKE $2"
+            " OR LOWER(body) LIKE $2"
+            " OR LOWER(category) LIKE $2"
+            " OR LOWER(meta::text) LIKE $2)"
+            " ORDER BY timestamp DESC LIMIT 100"
+        )
+        async with pool.acquire() as conn:
+            for word in words:
+                rows = await conn.fetch(sql, user["id"], f"%{word}%")
+                for row in rows:
+                    m = dict(row)
+                    if m["id"] in seen_ids:
+                        continue
+                    seen_ids.add(m["id"])
+                    if m.get("meta") and not isinstance(m["meta"], dict):
+                        try: m["meta"] = _json.loads(m["meta"])
+                        except: m["meta"] = {}
+                    m["sourceLabel"] = m.pop("source_label", m.get("source", ""))
+                    relevant.append(m)
 
     def score_msg(m):
-        text = get_text(m)
+        text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
         return sum(1 for w in words if w in text)
 
-    # Inkluder ALLE meldinger der minst ett søkeord finnes
-    relevant = [m for m in all_msgs if has_match(m)]
     relevant = sorted(relevant, key=score_msg, reverse=True)[:50]
     if not relevant:
-        relevant = all_msgs[:10]
+        relevant = await get_all_messages(user_id=user["id"], limit=10)
+
 
     def format_msg(m):
         parts = [f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]", f"Tittel: {m['title']}"]
