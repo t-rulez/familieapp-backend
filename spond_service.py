@@ -25,12 +25,17 @@ class SpondService:
                 if chats:
                     print(f"Spond: fant {len(chats)} chatter")
                     seen_chat_ids = set()
+                    # Filtrer bort arrangement-notifikasjonschatter
+                    SKIP_NAMES = {"ready idrettsforening", "ukjent", ""}
                     for chat in chats:
                         chat_id = chat.get("id", "")
-                        chat_name = chat.get("name", "ukjent")
+                        chat_name = chat.get("name", "") or "ukjent"
                         if not chat_id or chat_id in seen_chat_ids:
                             continue
                         seen_chat_ids.add(chat_id)
+                        # Hopp over generiske arrangement-chatter
+                        if chat_name.lower() in SKIP_NAMES:
+                            continue
                         # Hent meldinger per chat via direkte API-kall
                         try:
                             url = f"{s._chat_url}/chats/{chat_id}/messages/?max=50"
@@ -39,11 +44,6 @@ class SpondService:
                             ) as r:
                                 chat_msgs = await r.json()
                             print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
-                            if chat_msgs:
-                                first = chat_msgs[0] if chat_msgs else {}
-                                print(f"    Eksempel nøkler: {list(first.keys())[:8]}")
-                                print(f"    text: {str(first.get('text',''))[:80]}")
-                                print(f"    type: {first.get('type','?')}")
                             if chat_msgs:
                                 for msg in chat_msgs:
                                     ts_str = msg.get("timestamp", "")
@@ -94,21 +94,48 @@ class SpondService:
             if not text:
                 return None
 
-            msg_id = msg.get("identifier") or msg.get("id", "")
-            sender = msg.get("actor", {})
-            sender_name = f"{sender.get('firstName', '')} {sender.get('lastName', '')}".strip()
-            
-            group_name = chat.get("name", "Spond-gruppe")
-            
+            msg_type = msg.get("type", "TEXT")
+            msg_num  = msg.get("msgNum", "")
+            chat_id  = msg.get("chatId", chat.get("id", ""))
+            msg_id   = f"{chat_id}-{msg_num}" if msg_num else (msg.get("identifier") or msg.get("id", ""))
+
+            chat_name = chat.get("name", "") or ""
             timestamp_str = msg.get("timestamp", "")
             timestamp = self._parse_timestamp(timestamp_str)
-            
+
+            if msg_type == "CLUB_MESSAGE":
+                # Klubbmelding fra idrettslag
+                club_info = msg.get("clubMessage", {}) or {}
+                source_label = "Melding"
+                category = chat_name or "Spond"
+                title = text[:80] + ("..." if len(text) > 80 else "")
+                sender_name = club_info.get("clubName", chat_name)
+
+            elif msg_type in ("TEXT", "SPOND"):
+                # Direkte melding eller gruppechat
+                source_label = "Chat"
+                user_info = msg.get("user", {}) or {}
+                sender_name = f"{user_info.get('firstName', '')} {user_info.get('lastName', '')}".strip()
+                if chat_name and chat_name.lower() != "ukjent":
+                    # Navngitt gruppechat
+                    category = chat_name
+                    title = f"{sender_name}: {text[:60]}" if sender_name else text[:80]
+                else:
+                    # 1:1 chat – bruk personnavnet som kategori
+                    category = sender_name or "Chat"
+                    title = f"{sender_name}: {text[:60]}" if sender_name else text[:80]
+            else:
+                source_label = "Melding"
+                category = chat_name or "Spond"
+                title = text[:80]
+                sender_name = ""
+
             return {
                 "id": f"spond-msg-{msg_id}",
                 "source": "spond",
-                "sourceLabel": "Spond",
-                "category": group_name or "idrett",
-                "title": f"Melding fra {sender_name}" if sender_name else group_name,
+                "sourceLabel": source_label,
+                "category": category,
+                "title": title,
                 "tldr": text[:120] + ("..." if len(text) > 120 else ""),
                 "body": text,
                 "time": self._format_relative_time(timestamp),
@@ -116,8 +143,9 @@ class SpondService:
                 "priority": "medium",
                 "status": "unread",
                 "meta": {
-                    "group": group_name,
-                    "sender": sender_name
+                    "group": chat_name,
+                    "sender": sender_name,
+                    "type": msg_type
                 }
             }
         except Exception as e:
@@ -163,7 +191,7 @@ class SpondService:
             return {
                 "id": f"spond-event-{event_id}",
                 "source": "spond",
-                "sourceLabel": "Spond",
+                "sourceLabel": "Arrangement",
                 "category": group_name,
                 "title": heading,
                 "tldr": " · ".join(tldr_parts),
