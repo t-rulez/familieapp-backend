@@ -518,10 +518,7 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
             results["errors"].append(f"Spond: {str(e)}")
 
     # ── E-post (Skolemelding + Showbie) ────────────────────────────────────────
-    from email_service import EmailService, get_email_config
-    from users import get_user_email_configs
-
-    # Bygg e-postkonfig fra brukerinnstillinger
+    from email_service import EmailService
     from users import get_decrypted_password
     for idx in [1, 2]:
         enabled = settings.get(f"email_{idx}_enabled")
