@@ -82,50 +82,53 @@ async def run_ai_processing(user_id: str):
 
 # ─── Synk per bruker ─────────────────────────────────────────────────────────
 
-async def sync_user(user: dict) -> int:
+async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
+    """Henter nye meldinger fra alle kilder parallelt.
+    since: hvis satt, hentes bare meldinger nyere enn denne datoen.
+    """
     user_id = user["id"]
-    all_messages = []
 
-    # Spond
-    if user.get("spond_enabled") and user.get("spond_username"):
+    async def fetch_spond():
+        if not (user.get("spond_enabled") and user.get("spond_username")):
+            return []
         try:
             logger.info(f"Spond for {user['email']}...")
             svc = SpondService(username=user["spond_username"], password=user["spond_password"])
-            msgs = await svc.fetch_all()
-            for m in msgs:
-                m["user_id"] = user_id
-            all_messages.extend(msgs)
+            msgs = await svc.fetch_all(since=since)
+            for m in msgs: m["user_id"] = user_id
             logger.info(f"Spond: {len(msgs)} meldinger")
+            return msgs
         except Exception as e:
-            logger.error(f"Spond-synk feilet ({user['email']}): {e}")
+            logger.error(f"Spond-synk feilet: {e}")
+            return []
 
-    # E-post 1
-    if user.get("email_1_enabled") and user.get("email_1_username"):
+    async def fetch_email(num):
+        if not (user.get(f"email_{num}_enabled") and user.get(f"email_{num}_username")):
+            return []
         try:
-            config = _build_email_config(user, 1)
+            config = _build_email_config(user, num)
             svc = EmailService(config)
             msgs = await asyncio.to_thread(svc.fetch_all)
-            for m in msgs:
-                m["user_id"] = user_id
-            all_messages.extend(msgs)
-            logger.info(f"E-post 1: {len(msgs)} meldinger")
+            for m in msgs: m["user_id"] = user_id
+            logger.info(f"E-post {num}: {len(msgs)} meldinger")
+            return msgs
         except Exception as e:
-            logger.error(f"E-post-1-synk feilet ({user['email']}): {e}")
+            logger.error(f"E-post-{num}-synk feilet: {e}")
+            return []
 
-    # E-post 2
-    if user.get("email_2_enabled") and user.get("email_2_username"):
-        try:
-            config = _build_email_config(user, 2)
-            svc = EmailService(config)
-            msgs = await asyncio.to_thread(svc.fetch_all)
-            for m in msgs:
-                m["user_id"] = user_id
-            all_messages.extend(msgs)
-            logger.info(f"E-post 2: {len(msgs)} meldinger")
-        except Exception as e:
-            logger.error(f"E-post-2-synk feilet ({user['email']}): {e}")
+    # Kjør alle kilder parallelt
+    results = await asyncio.gather(
+        fetch_spond(),
+        fetch_email(1),
+        fetch_email(2),
+        return_exceptions=True
+    )
 
-    # Tell hvor mange som er nye (ikke eksisterende)
+    all_messages = []
+    for r in results:
+        if isinstance(r, list):
+            all_messages.extend(r)
+
     from database import count_unread_messages
     before = await count_unread_messages(user_id)
     await upsert_messages(all_messages)
@@ -133,8 +136,6 @@ async def sync_user(user: dict) -> int:
     new_count = after - before
 
     asyncio.create_task(run_ai_processing(user_id))
-
-    # Send push-varsel hvis det kom nye meldinger
     if new_count > 0:
         asyncio.create_task(notify_new_messages(user_id, new_count))
 
@@ -313,15 +314,24 @@ async def _maybe_update_profile(user_id: str):
 
 # ─── Synk ─────────────────────────────────────────────────────────────────────
 
+class SyncRequest(BaseModel):
+    since: Optional[str] = None  # ISO timestamp
+
 @app.post("/sync")
-async def trigger_sync(user: CurrentUser):
+async def trigger_sync(user: CurrentUser, req: SyncRequest = SyncRequest()):
     try:
         settings = await get_user_settings(user["id"])
         if not settings:
             raise HTTPException(status_code=400, detail="Ingen innstillinger funnet")
         user_with_settings = {**user, **settings}
-        count = await sync_user(user_with_settings)
-        return {"ok": True, "count": count}
+        since_dt = None
+        if req.since:
+            try:
+                since_dt = datetime.fromisoformat(req.since.replace("Z", "+00:00"))
+            except Exception:
+                pass
+        count = await sync_user(user_with_settings, since=since_dt)
+        return {"ok": True, "count": count, "last_sync": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

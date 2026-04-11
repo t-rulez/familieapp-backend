@@ -8,8 +8,10 @@ class SpondService:
         self.username = username
         self.password = password
 
-    async def fetch_all(self) -> list[dict]:
-        """Henter meldinger og arrangementer fra Spond og normaliserer dem."""
+    async def fetch_all(self, since: datetime = None) -> list[dict]:
+        """Henter meldinger og arrangementer fra Spond og normaliserer dem.
+        since: hvis satt, hentes bare meldinger nyere enn denne datoen.
+        """
         s = spond_lib.Spond(username=self.username, password=self.password)
         
         try:
@@ -17,7 +19,7 @@ class SpondService:
             
             results = []
             now = datetime.now(timezone.utc)
-            history_from = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            history_from = since if since else datetime(2026, 1, 1, tzinfo=timezone.utc)
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
