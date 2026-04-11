@@ -43,6 +43,9 @@ class SpondService:
                             print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
                             if chat_msgs:
                                 for msg in chat_msgs:
+                                    # Hopp over hvis msg ikke er en dict
+                                    if not isinstance(msg, dict):
+                                        continue
                                     ts_str = msg.get("timestamp", "")
                                     if ts_str:
                                         try:
@@ -92,9 +95,18 @@ class SpondService:
                 return None
 
             msg_type = msg.get("type", "TEXT")
-            msg_num  = msg.get("msgNum", "")
-            chat_id  = msg.get("chatId", chat.get("id", ""))
-            msg_id   = f"{chat_id}-{msg_num}" if msg_num else (msg.get("identifier") or msg.get("id", ""))
+            msg_num  = msg.get("msgNum")
+            chat_id  = msg.get("chatId") or chat.get("id", "")
+            # Bygg unik ID fra chatId + msgNum, eller fall tilbake på andre felt
+            if chat_id and msg_num is not None:
+                msg_id = f"{chat_id}-{msg_num}"
+            elif msg.get("identifier"):
+                msg_id = msg["identifier"]
+            elif msg.get("id"):
+                msg_id = msg["id"]
+            else:
+                import hashlib
+                msg_id = hashlib.md5(f"{chat_id}-{text[:50]}-{msg.get('timestamp','')}".encode()).hexdigest()[:16]
 
             chat_name = chat.get("name", "") or ""
             timestamp_str = msg.get("timestamp", "")
