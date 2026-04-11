@@ -497,7 +497,7 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
         from_dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     settings = await get_user_settings(user["id"])
-    results = {"spond": 0, "whatsapp": 0, "email1": 0, "email2": 0, "errors": []}
+    results = {"spond": 0, "whatsapp": 0, "email1": 0, "email2": 0, "errors": [], "email1_label": "Skolemelding", "email2_label": "Showbie"}
     all_messages = []
 
     # ── Spond ──────────────────────────────────────────────────────────────────
@@ -543,6 +543,7 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
                 m["user_id"] = user["id"]
             all_messages.extend(msgs)
             results[f"email{idx}"] = len(msgs)
+            results[f"email{idx}_label"] = email_cfg.get("source_label", f"E-post {idx}")
         except Exception as e:
             results["errors"].append(f"E-post {idx}: {str(e)}")
 
