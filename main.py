@@ -787,8 +787,16 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     family_section = f"FAMILIEPROFIL:\n{req.family_context}\n" if req.family_context else ""
     auto_section = f"LAERT KONTEKST:\n{req.auto_context}\n" if req.auto_context else ""
 
+    from datetime import date
+    today = date.today()
+    import locale
+    days_no = ["mandag","tirsdag","onsdag","torsdag","fredag","lørdag","søndag"]
+    months_no = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
+    today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
+
     system = (
-        "Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger.\n"
+        f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger.\n"
+        f"Dagens dato er {today_str}. Bruk denne datoen når du svarer på spørsmål om tid.\n"
         "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
         + family_section
         + auto_section
