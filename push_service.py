@@ -34,7 +34,7 @@ async def send_push(subscription: dict, title: str, body: str, tag: str = "famil
         logger.warning("VAPID_PRIVATE_KEY ikke satt – push-varsler deaktivert")
         return False
     try:
-        data = json.dumps({"title": title, "body": body, "tag": tag})
+        data = json.dumps({"title": title, "body": body, "tag": tag, "url": "/?filter=unread"})
         await asyncio.to_thread(
             webpush,
             subscription_info=subscription,
