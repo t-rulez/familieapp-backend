@@ -35,6 +35,11 @@ async def init_user_tables():
                 spond_username        TEXT,
                 spond_password        TEXT,
                 spond_enabled         BOOLEAN DEFAULT FALSE,
+                caldav_enabled        BOOLEAN DEFAULT FALSE,
+                caldav_url            TEXT DEFAULT 'https://caldav.icloud.com',
+                caldav_username       TEXT,
+                caldav_password       TEXT,
+                caldav_calendars      TEXT DEFAULT '',
                 email_1_host          TEXT,
                 email_1_port          INTEGER DEFAULT 993,
                 email_1_username      TEXT,
@@ -87,6 +92,17 @@ async def init_user_tables():
             CREATE UNIQUE INDEX IF NOT EXISTS user_profile_user_idx
             ON user_profile(user_id) WHERE user_id IS NOT NULL
         """)
+
+        # CalDAV-kolonner (migrering)
+        for col_def in [
+            "caldav_enabled BOOLEAN DEFAULT FALSE",
+            "caldav_url TEXT DEFAULT 'https://caldav.icloud.com'",
+            "caldav_username TEXT",
+            "caldav_password TEXT",
+            "caldav_calendars TEXT DEFAULT ''",
+        ]:
+            col_name = col_def.split()[0]
+            await conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_def}")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
@@ -193,7 +209,7 @@ async def get_user_settings(user_id: str) -> Optional[dict]:
     s = dict(row)
 
     # Dekrypter sensitive felter for intern bruk
-    for field in ["spond_password", "email_1_password", "email_2_password"]:
+    for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
         if s.get(field):
             try:
                 s[field] = decrypt(s[field])
@@ -217,7 +233,8 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
             SELECT
                 spond_password IS NOT NULL AND spond_password != '' AS spond_has_password,
                 email_1_password IS NOT NULL AND email_1_password != '' AS email_1_has_password,
-                email_2_password IS NOT NULL AND email_2_password != '' AS email_2_has_password
+                email_2_password IS NOT NULL AND email_2_password != '' AS email_2_has_password,
+                caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password
             FROM user_settings WHERE user_id = $1
         """, user_id)
     if row:
@@ -228,7 +245,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
 async def update_user_settings(user_id: str, updates: dict):
     """Oppdaterer innstillinger – krypterer passord automatisk."""
     # Krypter passord-felter
-    for field in ["spond_password", "email_1_password", "email_2_password"]:
+    for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
         if field in updates and updates[field]:
             updates[field] = encrypt(updates[field])
         elif field in updates and not updates[field]:
@@ -283,7 +300,7 @@ async def get_all_active_users() -> list[dict]:
     for row in rows:
         u = dict(row)
         # Dekrypter passord
-        for field in ["spond_password", "email_1_password", "email_2_password"]:
+        for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
             if u.get(field):
                 try:
                     u[field] = decrypt(u[field])

@@ -602,6 +602,27 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
     total = results["spond"] + results["email1"] + results["email2"] + results["whatsapp"]
     return {"ok": True, "total": total, "details": results}
 
+@app.get("/caldav/calendars")
+async def list_calendars(user: CurrentUser):
+    """Lister tilgjengelige kalendere fra CalDAV."""
+    settings = await get_user_settings(user["id"])
+    if not settings or not settings.get("caldav_username") or not settings.get("caldav_password"):
+        raise HTTPException(status_code=400, detail="CalDAV ikke konfigurert")
+    try:
+        import caldav as caldav_lib
+        def _list():
+            client = caldav_lib.DAVClient(
+                url=settings.get("caldav_url", "https://caldav.icloud.com"),
+                username=settings.get("caldav_username"),
+                password=settings.get("caldav_password")
+            )
+            return [c.name for c in client.principal().calendars()]
+        names = await asyncio.to_thread(_list)
+        return {"calendars": names}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/admin/fix-spond-categories")
 async def fix_spond_categories(user: CurrentUser):
     """Oppdaterer category på Spond-meldinger til gruppenavn fra meta."""
@@ -787,19 +808,36 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     family_section = f"FAMILIEPROFIL:\n{req.family_context}\n" if req.family_context else ""
     auto_section = f"LAERT KONTEKST:\n{req.auto_context}\n" if req.auto_context else ""
 
-    from datetime import date
-    today = date.today()
-    import locale
+    from datetime import date as _date
+    today = _date.today()
     days_no = ["mandag","tirsdag","onsdag","torsdag","fredag","lørdag","søndag"]
     months_no = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
     today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
 
+    # Hent kalenderdata hvis aktivert
+    calendar_section = ""
+    settings = await get_user_settings(user["id"])
+    if settings and settings.get("caldav_enabled") and settings.get("caldav_username") and settings.get("caldav_password"):
+        try:
+            from caldav_service import fetch_calendar_events, format_events_for_ai
+            events = await fetch_calendar_events(
+                url=settings.get("caldav_url", "https://caldav.icloud.com"),
+                username=settings.get("caldav_username", ""),
+                password=settings.get("caldav_password", ""),
+                calendar_filter=settings.get("caldav_calendars", ""),
+                days_ahead=14
+            )
+            calendar_section = f"KALENDER (neste 14 dager):\n{format_events_for_ai(events)}\n\n"
+        except Exception as e:
+            logger.warning(f"Kalender-henting feilet: {e}")
+
     system = (
-        f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger.\n"
+        f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger og kalender.\n"
         f"Dagens dato er {today_str}. Bruk denne datoen når du svarer på spørsmål om tid.\n"
         "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
         + family_section
         + auto_section
+        + calendar_section
         + "RELEVANTE MELDINGER:\n"
         + msg_context
     )
