@@ -94,15 +94,11 @@ async def init_user_tables():
         """)
 
         # CalDAV-kolonner (migrering)
-        for col_def in [
-            "caldav_enabled BOOLEAN DEFAULT FALSE",
-            "caldav_url TEXT DEFAULT 'https://caldav.icloud.com'",
-            "caldav_username TEXT",
-            "caldav_password TEXT",
-            "caldav_calendars TEXT DEFAULT ''",
-        ]:
-            col_name = col_def.split()[0]
-            await conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_def}")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS caldav_enabled BOOLEAN DEFAULT FALSE")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS caldav_url TEXT DEFAULT 'https://caldav.icloud.com'")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS caldav_username TEXT")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS caldav_password TEXT")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS caldav_calendars TEXT DEFAULT ''")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
