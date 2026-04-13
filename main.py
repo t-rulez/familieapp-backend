@@ -606,8 +606,10 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
 async def list_calendars(user: CurrentUser):
     """Lister tilgjengelige kalendere fra CalDAV."""
     settings = await get_user_settings(user["id"])
-    if not settings or not settings.get("caldav_username") or not settings.get("caldav_password"):
-        raise HTTPException(status_code=400, detail="CalDAV ikke konfigurert")
+    if not settings or not settings.get("caldav_username"):
+        raise HTTPException(status_code=400, detail="Fyll inn Apple ID og passord først")
+    if not settings.get("caldav_password"):
+        raise HTTPException(status_code=400, detail="Fyll inn app-spesifikt passord først")
     try:
         import caldav as caldav_lib
         def _list():
