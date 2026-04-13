@@ -289,6 +289,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "email_2_from_filter", "email_2_subject_filter", "email_2_delete_after",
         "email_2_source_label", "email_2_source", "email_2_category", "email_2_enabled",
         "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
+        "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
