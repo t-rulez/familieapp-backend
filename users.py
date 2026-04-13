@@ -172,7 +172,7 @@ async def get_user_by_id(user_id: str) -> Optional[dict]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
             SELECT id, email, display_name, is_admin, last_login
-            FROM user_settings WHERE user_id = $1
+            FROM users WHERE id = $1
         """, user_id)
     return dict(row) if row else None
 
