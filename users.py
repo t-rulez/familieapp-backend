@@ -231,7 +231,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
                 email_1_password IS NOT NULL AND email_1_password != '' AS email_1_has_password,
                 email_2_password IS NOT NULL AND email_2_password != '' AS email_2_has_password,
                 caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password
-            FROM user_settings WHERE user_id = $1
+            FROM users WHERE id = $1
         """, user_id)
     if row:
         settings.update(dict(row))
