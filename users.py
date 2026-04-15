@@ -297,13 +297,15 @@ async def get_all_active_users() -> list[dict]:
                 s.email_2_password, s.email_2_from_filter, s.email_2_subject_filter,
                 s.email_2_delete_after, s.email_2_source_label, s.email_2_source,
                 s.email_2_category, s.email_2_enabled,
-                s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled
+                s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
+                s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled
             FROM users u
             JOIN user_settings s ON u.id = s.user_id
             WHERE s.spond_enabled = TRUE
                OR s.email_1_enabled = TRUE
                OR s.email_2_enabled = TRUE
                OR s.wa_enabled = TRUE
+               OR s.showbie_enabled = TRUE
         """)
 
     users = []
