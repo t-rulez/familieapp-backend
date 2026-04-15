@@ -351,13 +351,15 @@ async def send_evening_summary(user: dict):
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
-        f"Skriv en ULTRAKORT oversikt over i morgen ({tomorrow_str}).\n"
-        f"VIKTIG: Ikke skriv dato eller overskrift - start direkte med innholdet.\n"
-        f"Format - kun stikkord, maks 4 linjer total:\n"
-        f"[Navn]: [aktivitet kl XX:XX]. [aktivitet].\n"
-        f"[Navn]: [aktivitet].\n"
-        f"[Annet/Familien]: [fellesting eller forberedelse].\n"
-        f"Ingen lister med bindestrek. Ingen 'Forbered i dag'-seksjon. Kun det viktigste. Svar pa norsk."
+        f"Svar KUN i dette formatet - ingen andre ord:\n"
+        f"[Navn]: [stikkord]. [stikkord kl XX].\n"
+        f"[Navn]: [stikkord].\n"
+        f"[Annet]: [stikkord].\n\n"
+        f"Eksempel pa RIKTIG svar:\n"
+        f"Gustav: Svomming. Fotball kl 17:20.\n"
+        f"Rasmus: Vanlig skole.\n"
+        f"Annet: Batloft fredag - pakk i dag.\n\n"
+        f"Maks 4 linjer. Kun navn og stikkord. Ingen setninger. Ingen dato."
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
