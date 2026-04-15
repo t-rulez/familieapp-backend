@@ -256,7 +256,7 @@ class ShowbieService:
             timestamp = datetime.fromtimestamp(created / 1000, tz=timezone.utc) if created else datetime.now(timezone.utc)
 
             # Formater dato
-            time_str = f"{DAYS_NO[timestamp.weekday()]} {timestamp.day}. {MONTHS_NO[timestamp.month-1]}"
+            time_str = timestamp.strftime("%-d. %b %H:%M")
 
             # Hent innhold fra bilde via Claude Vision hvis det er en PDF/bilde
             content_text = ""

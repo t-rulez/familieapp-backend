@@ -277,20 +277,29 @@ async def evening_summary_loop():
 
 async def send_evening_summary(user: dict):
     """Genererer og sender morgendagens oversikt til en bruker."""
+    import re, httpx, os
+    from datetime import date as _date, timedelta
+    from database import get_pool
+
     uid = user["id"]
     subs = await get_push_subscriptions(uid)
     if not subs:
         return
 
-    # Generer morgendagens oversikt via AI
-    question = "Hva skjer i morgen? Gi meg en oversikt over arrangementer, meldinger og viktige ting for i morgen. Svar kort og konsist, maks 5-6 setninger."
+    # Beregn morgendagens dato eksplisitt
+    today = _date.today()
+    tomorrow = today + timedelta(days=1)
+    days_no = ["mandag","tirsdag","onsdag","torsdag","fredag","lordag","sondag"]
+    months_no = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
+    today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
+    tomorrow_str = f"{days_no[tomorrow.weekday()]} {tomorrow.day}. {months_no[tomorrow.month-1]} {tomorrow.year}"
 
-    words = [w.lower().strip('?.,!') for w in question.split() if len(w) > 3]
-    stopwords = {'hva', 'skjer', 'meg', 'over', 'for', 'maks', 'svar', 'kort'}
-    words = [w for w in words if w not in stopwords]
+    question = f"Gi meg en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter. Ta med hva vi bor forberede i dag. Maks 5-6 setninger."
 
-    from database import get_pool
-    import json as _json
+    stopwords = {"jeg","deg","han","hun","den","det","de","vi","ikke","har","er","var",
+                 "med","for","til","fra","pa","av","om","og","eller","men","som","hva","nar"}
+    words = [w.lower().strip("?.,!") for w in question.split() if len(w) > 3 and w.lower() not in stopwords]
+
     pool = await get_pool()
     seen_ids = set()
     relevant = []
@@ -299,8 +308,9 @@ async def send_evening_summary(user: dict):
         "SELECT id, source, source_label, category, title, tldr, body,"
         " time_label AS time, timestamp, priority, status, meta"
         " FROM messages WHERE user_id = $1"
-        " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2)"
-        " ORDER BY timestamp DESC LIMIT 50"
+        " AND status != 'skipped'"
+        " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2 OR LOWER(category) LIKE $2)"
+        " ORDER BY timestamp DESC LIMIT 100"
     )
     async with pool.acquire() as conn:
         for word in words:
@@ -311,41 +321,43 @@ async def send_evening_summary(user: dict):
                     seen_ids.add(m["id"])
                     relevant.append(m)
 
-    # Hent også de siste 20 meldingene uansett
-    recent = await get_all_messages(user_id=uid, limit=20)
+    recent = await get_all_messages(user_id=uid, limit=30)
     for m in recent:
         if m["id"] not in seen_ids:
             seen_ids.add(m["id"])
             relevant.append(m)
 
     def fmt(m):
-        parts = [f"[{m.get('source_label','?')} - {m.get('time','')}] {m['title']}"]
-        if m.get('tldr'):
-            parts.append(f"  {m['tldr']}")
-        if m.get('body'):
-            parts.append(f"  {m['body'][:500]}")
+        src = m.get("source_label") or m.get("source", "?")
+        parts = [f"[{src} - {m.get('time','')}] {m.get('title','')}"]
+        if m.get("tldr"):
+            parts.append(f"  Sammendrag: {m['tldr']}")
+        if m.get("body") and m["body"] != m.get("tldr", ""):
+            max_b = 2000 if m.get("source") == "showbie" else 800
+            parts.append(f"  Innhold: {m['body'][:max_b]}")
         return "\n".join(parts)
 
-    msg_context = "\n\n".join([fmt(m) for m in relevant[:40]])
+    def score_m(m):
+        text = f"{m.get('title','')} {m.get('tldr','')} {m.get('body','')}".lower()
+        return sum(1 for w in words if w in text)
 
-    from datetime import date as _date
-    today = _date.today()
-    days_no = ["mandag","tirsdag","onsdag","torsdag","fredag","lørdag","søndag"]
-    months_no = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
-    today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
+    relevant = sorted(relevant, key=score_m, reverse=True)[:80]
+    msg_context = "\n\n".join([fmt(m) for m in relevant])
 
     settings = await get_user_settings(uid)
     family_ctx = settings.get("family_context", "") if settings else ""
+    auto_ctx = settings.get("ai_learned_context", "") if settings else ""
 
-    system = f"""Du er en familieassistent. Dagens dato er {today_str}.
-{f"FAMILIEPROFIL: {family_ctx}" if family_ctx else ""}
+    system = (
+        f"Du er en familieassistent som gir daglige oversikter.\n"
+        f"Dagens dato er {today_str}. I morgen er det {tomorrow_str}.\n"
+        f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
+        f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
+        f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
+        f"Fokuser pa hva som skjer i morgen ({tomorrow_str}). Nevn ogsa hva som bor forberedes i dag.\n"
+        f"Svar kun pa norsk. Vaer kort og konkret."
+    )
 
-Her er meldinger og informasjon fra familie-appen:
-{msg_context}
-
-Svar kun på norsk. Vær kort og konkret."""
-
-    import httpx, os
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return
@@ -358,21 +370,20 @@ Svar kun på norsk. Vær kort og konkret."""
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
+            logger.error(f"[EVENING] API feil: {resp.status_code}")
             return
         answer = resp.json()["content"][0]["text"].strip()
 
-    # Rens markdown for push-notifikasjon
-    import re
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
     clean = re.sub(r'#{1,3} ', '', clean)
-
-    # Begrens til 3000 tegn (web push grense)
     if len(clean) > 3000:
         clean = clean[:2950] + "..."
 
-    logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:60]}...")
-    await send_push_to_user(subs, "📅 Morgendagens oversikt", clean, "evening-summary")
+    logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:80]}...")
+    await send_push_to_user(subs, f"Morgendagens oversikt - {tomorrow_str}", clean, "evening-summary")
+
+
 
 
 @asynccontextmanager
