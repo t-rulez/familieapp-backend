@@ -244,6 +244,22 @@ async def init_ai_tables():
             CREATE UNIQUE INDEX IF NOT EXISTS user_profile_user_id_idx
             ON user_profile (user_id) WHERE user_id IS NOT NULL
         """)
+        # API-forbruk tabell
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_usage (
+                id          SERIAL PRIMARY KEY,
+                user_id     TEXT,
+                source      TEXT,
+                purpose     TEXT,
+                tokens_in   INTEGER DEFAULT 0,
+                tokens_out  INTEGER DEFAULT 0,
+                cost_usd    FLOAT DEFAULT 0,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS api_usage_user_idx ON api_usage (user_id, created_at DESC)
+        """)
     logger.info("AI-tabeller initialisert")
 
 
@@ -414,3 +430,63 @@ async def count_unread_messages(user_id: str) -> int:
             SELECT COUNT(*) FROM messages
             WHERE user_id = $1 AND status = 'unread'
         """, user_id)
+
+
+# Sonnet 4 priser per million tokens
+PRICE_INPUT_PER_M = 3.0
+PRICE_OUTPUT_PER_M = 15.0
+
+
+async def log_api_usage(user_id: str, source: str, purpose: str, tokens_in: int, tokens_out: int):
+    """Logg API-forbruk til databasen."""
+    cost = (tokens_in / 1_000_000 * PRICE_INPUT_PER_M) + (tokens_out / 1_000_000 * PRICE_OUTPUT_PER_M)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO api_usage (user_id, source, purpose, tokens_in, tokens_out, cost_usd)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, user_id, source, purpose, tokens_in, tokens_out, cost)
+
+
+async def get_api_usage_stats(user_id: str) -> dict:
+    """Henter API-forbruksstatistikk for en bruker."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Totalt
+        total = await conn.fetchrow("""
+            SELECT
+                COALESCE(SUM(tokens_in), 0) AS tokens_in,
+                COALESCE(SUM(tokens_out), 0) AS tokens_out,
+                COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                COUNT(*) AS calls
+            FROM api_usage WHERE user_id = $1
+        """, user_id)
+        # Denne måneden
+        month = await conn.fetchrow("""
+            SELECT
+                COALESCE(SUM(tokens_in), 0) AS tokens_in,
+                COALESCE(SUM(tokens_out), 0) AS tokens_out,
+                COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                COUNT(*) AS calls
+            FROM api_usage
+            WHERE user_id = $1
+              AND created_at >= date_trunc('month', NOW())
+        """, user_id)
+        # Per kilde denne måneden
+        by_source = await conn.fetch("""
+            SELECT source, purpose,
+                COALESCE(SUM(tokens_in), 0) AS tokens_in,
+                COALESCE(SUM(tokens_out), 0) AS tokens_out,
+                COALESCE(SUM(cost_usd), 0) AS cost_usd,
+                COUNT(*) AS calls
+            FROM api_usage
+            WHERE user_id = $1
+              AND created_at >= date_trunc('month', NOW())
+            GROUP BY source, purpose
+            ORDER BY cost_usd DESC
+        """, user_id)
+    return {
+        "total": dict(total),
+        "month": dict(month),
+        "by_source": [dict(r) for r in by_source]
+    }

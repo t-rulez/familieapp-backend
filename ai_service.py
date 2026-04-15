@@ -47,7 +47,11 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500) -> str:
 
                 response.raise_for_status()
                 data = response.json()
-                return data["content"][0]["text"].strip()
+                usage = data.get("usage", {})
+                tokens_in = usage.get("input_tokens", 0)
+                tokens_out = usage.get("output_tokens", 0)
+                text = data["content"][0]["text"].strip()
+                return text, tokens_in, tokens_out
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
             if delay is not None:
@@ -59,7 +63,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500) -> str:
     raise RuntimeError("API-kall feilet etter alle forsok")
 
 
-async def generate_tldr(title: str, body: str, source_label: str) -> str:
+async def generate_tldr(title: str, body: str, source_label: str, user_id: str = None) -> str:
     """
     Genererer en kort TL;DR for en melding.
     Returnerer original TL;DR (første 150 tegn) hvis API-kall feiler.
@@ -96,7 +100,8 @@ async def score_relevance(
     message: dict,
     read_examples: list[dict],
     skipped_examples: list[dict],
-    user_profile: str | None
+    user_profile: str | None,
+    user_id: str = None
 ) -> dict:
     """
     Vurderer relevansen av en melding basert på brukerens tidligere valg.
@@ -165,7 +170,7 @@ Regler:
 - auto_skip: sett true KUN hvis du er meget sikker (low score + klart mønster)
 - Vær konservativ – tvilstilfeller skal alltid vises til brukeren"""
 
-        response = await _call_claude(system, user_prompt, max_tokens=200)
+        response, tokens_in, tokens_out = await _call_claude(system, user_prompt, max_tokens=200)
 
         # Parse JSON-svar
         # Finn JSON-blokken i svaret
@@ -173,6 +178,12 @@ Regler:
         end = response.rfind("}") + 1
         if start >= 0 and end > start:
             result = json.loads(response[start:end])
+            if user_id:
+                try:
+                    from database import log_api_usage
+                    await log_api_usage(user_id, message.get("source","unknown"), "scoring", tokens_in, tokens_out)
+                except Exception:
+                    pass
             return {
                 "score": result.get("score", "medium"),
                 "auto_skip": result.get("auto_skip", False),

@@ -343,7 +343,19 @@ class ShowbieService:
                     }
                 )
                 if res.status_code == 200:
-                    return res.json().get("content", [{}])[0].get("text", "")
+                    data = res.json()
+                    usage = data.get("usage", {})
+                    if self.user_id:
+                        try:
+                            from database import log_api_usage
+                            await log_api_usage(
+                                self.user_id, "showbie", "vision",
+                                usage.get("input_tokens", 0),
+                                usage.get("output_tokens", 0)
+                            )
+                        except Exception:
+                            pass
+                    return data.get("content", [{}])[0].get("text", "")
         except Exception as e:
             logger.error(f"Claude Vision feilet: {e}")
         return ""

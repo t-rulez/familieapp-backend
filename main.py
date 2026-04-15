@@ -13,6 +13,7 @@ from spond_service import SpondService
 from email_service import EmailService
 from database import (
     init_db, init_ai_tables, init_push_tables,
+    get_api_usage_stats,
     upsert_messages, get_all_messages, update_message_status,
     get_stats, get_classified_messages, get_user_profile,
     save_user_profile, save_ai_result, get_unprocessed_messages,
@@ -64,8 +65,8 @@ async def run_ai_processing(user_id: str):
     user_profile = await get_user_profile(user_id=user_id)
     for msg in unprocessed:
         try:
-            tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""))
-            relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile)
+            tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
+            relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id)
             await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
             src = msg.get('source','').upper()
             logger.info(f"[AI/{src}] [{relevance['score']}] {msg['title'][:50]}")
@@ -667,6 +668,13 @@ async def list_calendars(user: CurrentUser):
         return {"calendars": names}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats/api")
+async def get_api_stats(user: CurrentUser):
+    """Henter API-forbruksstatistikk."""
+    stats = await get_api_usage_stats(user["id"])
+    return stats
 
 
 @app.post("/admin/fix-spond-categories")
