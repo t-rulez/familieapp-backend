@@ -91,12 +91,18 @@ class ShowbieService:
 
     async def _get_groups(self, client) -> list:
         try:
+            headers = self._auth_headers()
+            logger.info(f"Showbie groups URL: {self.base_url}/users/{self.user_id}/groups")
+            logger.info(f"Showbie auth: {headers.get('Authorization','')[:40]}...")
             r = await client.get(
                 f"{self.base_url}/users/{self.user_id}/groups",
-                headers=self._auth_headers()
+                headers=headers
             )
+            logger.info(f"Showbie groups status: {r.status_code}")
             if r.status_code == 200:
                 return r.json().get("groups", [])
+            else:
+                logger.error(f"Showbie groups feil: {r.status_code} {r.text[:200]}")
         except Exception as e:
             logger.error(f"Showbie groups feilet: {e}")
         return []
