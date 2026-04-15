@@ -237,26 +237,23 @@ async def evening_summary_loop():
     """Sender kveldssammendrag kl 20:00 norsk tid hver dag."""
     import pytz
     oslo_tz = pytz.timezone("Europe/Oslo")
-    sent_today = set()  # user_ids som har fått varsel i dag
+    # Format: {uid: "2026-04-15"} – dato for siste sendte varsel per bruker
+    last_sent = {}
 
     while True:
         try:
             now_oslo = datetime.now(oslo_tz)
             today_key = now_oslo.strftime("%Y-%m-%d")
 
-            # Reset sendte varsler ved midnatt
-            if today_key not in sent_today:
-                sent_today = set()
-
-            # Sjekk alle brukere med evening_summary_enabled
             users = await get_all_active_users()
             for user in users:
                 if not user.get("evening_summary_enabled"):
                     continue
                 uid = user["id"]
-                if uid in sent_today:
+                # Allerede sendt i dag?
+                if last_sent.get(uid) == today_key:
                     continue
-                # Hent konfigurert tidspunkt (standard 20:00)
+                # Hent konfigurert tidspunkt
                 time_str = user.get("evening_summary_time") or "20:00"
                 try:
                     h, m = int(time_str.split(":")[0]), int(time_str.split(":")[1])
@@ -264,12 +261,12 @@ async def evening_summary_loop():
                     h, m = 20, 0
                 if now_oslo.hour == h and now_oslo.minute == m:
                     logger.info(f"[EVENING] Sender til {uid[:8]}...")
-                    sent_today.add(uid)
+                    last_sent[uid] = today_key  # Marker som sendt FØR kallet
                     try:
                         await send_evening_summary(user)
                     except Exception as e:
                         logger.error(f"[EVENING] Feilet for {uid}: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(50)  # 50 sek – aldri to kjøringer innen samme minutt
         except Exception as e:
             logger.error(f"[EVENING] Loop feilet: {e}")
             await asyncio.sleep(60)
@@ -382,6 +379,9 @@ async def send_evening_summary(user: dict):
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
     clean = re.sub(r'#{1,3} ', '', clean)
+    # Fjern dato-linjer som Claude legger til uansett instruksjon
+    clean = re.sub(r'^.{0,30}\d{1,2}\.\s*\w+\s*\d{4}[:\s]*\n?', '', clean, flags=re.MULTILINE)
+    clean = clean.strip()
     if len(clean) > 3000:
         clean = clean[:2950] + "..."
 
