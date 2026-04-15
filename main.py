@@ -59,7 +59,7 @@ async def run_ai_processing(user_id: str):
     unprocessed = await get_unprocessed_messages(limit=5, user_id=user_id)
     if not unprocessed:
         return
-    logger.info(f"AI-behandler {len(unprocessed)} meldinger for bruker {user_id}...")
+    logger.info(f"[AI] Behandler {len(unprocessed)} meldinger for bruker {user_id[:8]}...")
     read_examples, skipped_examples = await get_classified_messages(user_id=user_id)
     user_profile = await get_user_profile(user_id=user_id)
     for msg in unprocessed:
@@ -67,7 +67,8 @@ async def run_ai_processing(user_id: str):
             tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""))
             relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile)
             await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
-            logger.info(f"AI: [{relevance['score']}] {msg['title'][:50]}")
+            src = msg.get('source','').upper()
+            logger.info(f"[AI/{src}] [{relevance['score']}] {msg['title'][:50]}")
             await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"AI-behandling feilet for {msg.get('id')}: {e}")
@@ -92,14 +93,14 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
         if not (user.get("spond_enabled") and user.get("spond_username")):
             return []
         try:
-            logger.info(f"Spond for {user['email']}...")
+            logger.info(f"[SPOND] Synkroniserer for {user['email']}...")
             svc = SpondService(username=user["spond_username"], password=user["spond_password"])
             msgs = await svc.fetch_all(since=since)
             for m in msgs: m["user_id"] = user_id
-            logger.info(f"Spond: {len(msgs)} meldinger")
+            logger.info(f"[SPOND] {len(msgs)} meldinger hentet")
             return msgs
         except Exception as e:
-            logger.error(f"Spond-synk feilet: {e}")
+            logger.error(f"[SPOND] Synk feilet: {e}")
             return []
 
     async def fetch_showbie():
@@ -111,24 +112,26 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids)
             msgs = await svc.fetch_all(since=since)
             for m in msgs: m["user_id"] = user_id
-            logger.info(f"Showbie: {len(msgs)} meldinger")
+            logger.info(f"[SHOWBIE] {len(msgs)} meldinger hentet")
             return msgs
         except Exception as e:
-            logger.error(f"Showbie-synk feilet: {e}")
+            logger.error(f"[SHOWBIE] Synk feilet: {e}")
             return []
 
     async def fetch_email(num):
         if not (user.get(f"email_{num}_enabled") and user.get(f"email_{num}_username")):
             return []
+        label = config_label = _build_email_config(user, num).get("source_label", f"E-post {num}") if (user.get(f"email_{num}_enabled") and user.get(f"email_{num}_username")) else f"E-post {num}"
         try:
             config = _build_email_config(user, num)
+            label = config.get("source_label", f"E-post {num}").upper()
             svc = EmailService(config)
             msgs = await asyncio.to_thread(svc.fetch_all)
             for m in msgs: m["user_id"] = user_id
-            logger.info(f"E-post {num}: {len(msgs)} meldinger")
+            logger.info(f"[{label}] {len(msgs)} meldinger hentet")
             return msgs
         except Exception as e:
-            logger.error(f"E-post-{num}-synk feilet: {e}")
+            logger.error(f"[E-POST {num}] Synk feilet: {e}")
             return []
 
     # Kjør alle kilder parallelt

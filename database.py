@@ -304,11 +304,19 @@ async def save_user_profile(profile: str, user_id: str = None):
     pool = await get_pool()
     async with pool.acquire() as conn:
         if user_id:
-            await conn.execute("""
-                INSERT INTO user_profile (user_id, profile)
-                VALUES ($1, $2)
-                ON CONFLICT (user_id) DO UPDATE SET profile = $2, updated_at = NOW()
+            # Prøv UPDATE først, så INSERT hvis ikke finnes
+            result = await conn.execute("""
+                UPDATE user_profile SET profile = $2, updated_at = NOW()
+                WHERE user_id = $1
             """, user_id, profile)
+            if result == "UPDATE 0":
+                try:
+                    await conn.execute("""
+                        INSERT INTO user_profile (user_id, profile)
+                        VALUES ($1, $2)
+                    """, user_id, profile)
+                except Exception:
+                    pass  # Allerede finnes
         else:
             await conn.execute("""
                 UPDATE user_profile SET profile = $1, updated_at = NOW() WHERE id = 1
