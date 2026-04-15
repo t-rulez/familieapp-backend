@@ -2,6 +2,21 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timezone
+
+# Skru av støy fra tredjeparts biblioteker
+logging.getLogger("icalendar").setLevel(logging.CRITICAL)
+logging.getLogger("caldav").setLevel(logging.CRITICAL)
+logging.getLogger("root").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+class _NoiseFilter(logging.Filter):
+    """Filtrer bort støy-endepunkter fra uvicorn access-logg."""
+    _SKIP = {"/ai/history", "/messages", "/health"}
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(s in msg for s in self._SKIP)
+
+logging.getLogger("uvicorn.access").addFilter(_NoiseFilter())
 from contextlib import asynccontextmanager
 from typing import Optional, Annotated
 

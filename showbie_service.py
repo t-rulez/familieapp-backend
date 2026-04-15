@@ -223,7 +223,7 @@ class ShowbieService:
                 )
             if r.status_code == 200:
                 return r.json().get("folders", [])
-            logger.error(f"[SHOWBIE]  folders {assignment_id}: {r.status_code}")
+            logger.debug(f"[SHOWBIE] Ingen tilgang til assignment {assignment_id} (403 – ikke barnets)")
         except Exception as e:
             logger.error(f"[SHOWBIE]  folders feilet: {e}")
         return []
