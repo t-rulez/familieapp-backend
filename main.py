@@ -354,8 +354,10 @@ async def send_evening_summary(user: dict):
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
-        f"Fokuser pa hva som skjer i morgen ({tomorrow_str}). Nevn ogsa hva som bor forberedes i dag.\n"
-        f"Svar kun pa norsk. Vaer kort og konkret."
+        f"Skriv en VELDIG KOMPAKT oppsummering av i morgen ({tomorrow_str}).\n"
+        f"Format: 2-3 korte setninger maks. Ingen lister, ingen overskrifter, ingen linjeskift.\n"
+        f"Inkluder: aktiviteter, skole, og ett tips om hva som bor forberedes i dag.\n"
+        f"Svar kun pa norsk."
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -366,7 +368,7 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 400,
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 150,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
