@@ -45,12 +45,12 @@ class ShowbieService:
             # Hent klasser for å få gruppenavn
             classes = await self._get_classes(client)
             class_map = {c["id"]: c for c in classes}
-            logger.info(f"Showbie: fant {len(classes)} klasser")
+            logger.info(f"[SHOWBIE] : fant {len(classes)} klasser")
 
             # Hent assignments via hvert barn sin ID
             for child_id in self.child_ids:
                 assignments = await self._get_child_assignments(client, child_id)
-                logger.info(f"Showbie barn {child_id[:8]}: {len(assignments)} assignments")
+                logger.info(f"[SHOWBIE]  barn {child_id[:8]}: {len(assignments)} assignments")
 
                 for assignment in assignments:
                     # Finn gruppenavn fra class_map
@@ -99,9 +99,9 @@ class ShowbieService:
             )
             if r.status_code == 200:
                 return r.json().get("assignments", [])
-            logger.error(f"Showbie child assignments {child_id[:8]}: {r.status_code} {r.text[:100]}")
+            logger.error(f"[SHOWBIE]  child assignments {child_id[:8]}: {r.status_code} {r.text[:100]}")
         except Exception as e:
-            logger.error(f"Showbie child assignments feilet: {e}")
+            logger.error(f"[SHOWBIE]  child assignments feilet: {e}")
         return []
 
     async def _get_classes(self, client) -> list:
@@ -114,9 +114,9 @@ class ShowbieService:
             if r.status_code == 200:
                 return r.json().get("classes", [])
             else:
-                logger.error(f"Showbie classes feil: {r.status_code} {r.text[:200]}")
+                logger.error(f"[SHOWBIE]  classes feil: {r.status_code} {r.text[:200]}")
         except Exception as e:
-            logger.error(f"Showbie classes feilet: {e}")
+            logger.error(f"[SHOWBIE]  classes feilet: {e}")
         return []
 
     async def _get_child_ids(self, client) -> list:
@@ -130,7 +130,7 @@ class ShowbieService:
                 data = r.json()
                 user = data.get("user", {})
                 # Logg alle nøkler for debugging
-                logger.info(f"Showbie me nøkler: {list(user.keys())[:15]}")
+                logger.info(f"[SHOWBIE]  me nøkler: {list(user.keys())[:15]}")
                 # Prøv ulike felt som kan inneholde barn
                 children = (
                     user.get("children") or
@@ -144,29 +144,29 @@ class ShowbieService:
                 if self.child_ids:
                     return self.child_ids
             else:
-                logger.error(f"Showbie me feil: {r.status_code}")
+                logger.error(f"[SHOWBIE]  me feil: {r.status_code}")
         except Exception as e:
-            logger.error(f"Showbie child_ids feilet: {e}")
+            logger.error(f"[SHOWBIE]  child_ids feilet: {e}")
         return self.child_ids or []
 
     async def _get_groups(self, client, user_id: str = None) -> list:
         try:
             headers = self._auth_headers()
             uid = user_id or self.user_id
-            logger.info(f"Showbie groups URL: {self.base_url}/users/{uid}/groups")
-            logger.info(f"Showbie auth: {headers.get('Authorization','')[:40]}...")
+            logger.info(f"[SHOWBIE]  groups URL: {self.base_url}/users/{uid}/groups")
+            logger.info(f"[SHOWBIE]  auth: {headers.get('Authorization','')[:40]}...")
             uid = user_id or self.user_id
             r = await client.get(
                 f"{self.base_url}/users/{uid}/groups",
                 headers=headers
             )
-            logger.info(f"Showbie groups status: {r.status_code}")
+            logger.info(f"[SHOWBIE]  groups status: {r.status_code}")
             if r.status_code == 200:
                 return r.json().get("groups", [])
             else:
-                logger.error(f"Showbie groups feil: {r.status_code} {r.text[:200]}")
+                logger.error(f"[SHOWBIE]  groups feil: {r.status_code} {r.text[:200]}")
         except Exception as e:
-            logger.error(f"Showbie groups feilet: {e}")
+            logger.error(f"[SHOWBIE]  groups feilet: {e}")
         return []
 
     async def _get_assignments(self, client, group_id: str) -> list:
@@ -185,9 +185,9 @@ class ShowbieService:
             )
             if r2.status_code == 200:
                 return r2.json().get("assignments", [])
-            logger.error(f"Showbie assignments {group_id}: {r.status_code}, {r2.status_code} - {r.text[:100]}")
+            logger.error(f"[SHOWBIE]  assignments {group_id}: {r.status_code}, {r2.status_code} - {r.text[:100]}")
         except Exception as e:
-            logger.error(f"Showbie assignments feilet: {e}")
+            logger.error(f"[SHOWBIE]  assignments feilet: {e}")
         return []
 
     async def _get_folders(self, client, assignment_id, child_id: str = None) -> list:
@@ -205,9 +205,9 @@ class ShowbieService:
                 )
             if r.status_code == 200:
                 return r.json().get("folders", [])
-            logger.error(f"Showbie folders {assignment_id}: {r.status_code}")
+            logger.error(f"[SHOWBIE]  folders {assignment_id}: {r.status_code}")
         except Exception as e:
-            logger.error(f"Showbie folders feilet: {e}")
+            logger.error(f"[SHOWBIE]  folders feilet: {e}")
         return []
 
     async def _get_folder_posts(self, client, folder_id) -> list:
@@ -219,7 +219,7 @@ class ShowbieService:
             if r.status_code == 200:
                 return r.json().get("folderPosts", [])
         except Exception as e:
-            logger.error(f"Showbie folder-posts feilet: {e}")
+            logger.error(f"[SHOWBIE]  folder-posts feilet: {e}")
         return []
 
     async def _normalize_post(
@@ -274,7 +274,7 @@ class ShowbieService:
                 }
             }
         except Exception as e:
-            logger.error(f"Showbie normalisering feilet: {e}")
+            logger.error(f"[SHOWBIE]  normalisering feilet: {e}")
             return None
 
     async def _extract_content_from_preview(self, client, preview_url: str, assignment_name: str, file_name: str) -> str:

@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from datetime import datetime, timezone, timedelta
 from spond import spond as spond_lib
+
+logger = logging.getLogger(__name__)
 
 
 class SpondService:
@@ -18,20 +21,20 @@ class SpondService:
             import time as _time
             t0 = _time.time()
             await s.login()
-            print(f"Spond login: {_time.time()-t0:.1f}s")
+            logger.info(f"[SPOND] Login: {_time.time()-t0:.1f}s")
             
             results = []
             now = datetime.now(timezone.utc)
             history_from = since if since else datetime(2026, 1, 1, tzinfo=timezone.utc)
-            print(f"Spond synk siden: {history_from.strftime('%Y-%m-%d %H:%M') if since else 'alt'}")
+            logger.info(f"[SPOND] Synk siden: {history_from.strftime('%Y-%m-%d %H:%M') if since else 'alt'}")
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
                 chats = await s.get_messages()
                 t1 = _time.time()
-                print(f"Spond get_messages: {t1-t0:.1f}s")
+                logger.info(f"[SPOND] get_messages: {t1-t0:.1f}s")
                 if chats:
-                    print(f"Spond: fant {len(chats)} chatter")
+                    logger.info(f"[SPOND] Fant {len(chats)} chatter")
                     seen_chat_ids = set()
                     for chat in chats:
                         chat_id = chat.get("id", "")
@@ -46,7 +49,7 @@ class SpondService:
                                 url, headers={"auth": s._auth}
                             ) as r:
                                 chat_msgs = await r.json()
-                            print(f"  Chat '{chat_name}': {len(chat_msgs) if chat_msgs else 0} meldinger")
+                            # chat log fjernet
                             # chat_msgs kan være en liste, dict eller noe annet
                             if isinstance(chat_msgs, dict):
                                 chat_msgs = chat_msgs.get("messages", []) or []
@@ -69,11 +72,11 @@ class SpondService:
                                     if normalized:
                                         results.append(normalized)
                         except Exception as e:
-                            print(f"  Feil ved henting av meldinger fra '{chat_name}': {e}")
+                            logger.warning(f"[SPOND] Feil fra chat '{chat_name}': {e}")
                 else:
-                    print("Spond: ingen chatter funnet")
+                    logger.info("[SPOND] Ingen chatter funnet")
             except Exception as e:
-                print(f"Kunne ikke hente meldinger: {e}")
+                logger.error(f"[SPOND] Meldinger feilet: {e}")
 
             # ── Hent arrangementer (historisk + fremtid) ──────────────────────
             try:
@@ -91,7 +94,7 @@ class SpondService:
                         if normalized:
                             results.append(normalized)
             except Exception as e:
-                print(f"Kunne ikke hente arrangementer: {e}")
+                logger.error(f"[SPOND] Arrangementer feilet: {e}")
 
         finally:
             await s.clientsession.close()
@@ -178,7 +181,7 @@ class SpondService:
                 }
             }
         except Exception as e:
-            print(f"Feil ved normalisering av melding: {e}")
+            # normalisering feil ignorert
             return None
 
     def _normalize_event(self, event: dict) -> dict | None:
@@ -246,7 +249,7 @@ class SpondService:
                 }
             }
         except Exception as e:
-            print(f"Feil ved normalisering av arrangement: {e}")
+            # normalisering feil ignorert
             return None
 
     def _parse_timestamp(self, ts: str) -> datetime:

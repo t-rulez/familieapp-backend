@@ -71,18 +71,19 @@ class EmailService:
         messages = []
 
         try:
-            logger.info(f"Kobler til IMAP: {self.config['host']} som {self.config['username']}")
+            label = self.config.get("source_label", "E-POST").upper()
+            logger.info(f"[{label}] Kobler til IMAP: {self.config['host']} som {self.config['username']}")
             mail = imaplib.IMAP4_SSL(self.config["host"], self.config["port"])
             mail.login(self.config["username"], self.config["password"])
             mail.select("INBOX")
 
             # Bygg søkekriterier
             search_criteria = self._build_search_criteria()
-            logger.info(f"IMAP-søk: {search_criteria}")
+            logger.info(f"[{label}] IMAP-søk: {search_criteria}")
 
             _, message_ids = mail.search(None, search_criteria)
             ids = message_ids[0].split()
-            logger.info(f"Fant {len(ids)} e-poster")
+            logger.info(f"[{label}] Fant {len(ids)} e-poster")
 
             ids_to_delete = []
 
