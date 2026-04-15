@@ -41,11 +41,20 @@ class ShowbieService:
         """Henter alle relevante meldinger fra Showbie."""
         results = []
         async with httpx.AsyncClient(timeout=60) as client:
-            # Hent grupper
-            groups = await self._get_groups(client)
-            logger.info(f"Showbie: fant {len(groups)} grupper")
+            # Hent barn/relatives først
+            relatives = await self._get_relatives(client)
+            logger.info(f"Showbie: fant {len(relatives)} relatives")
 
-            for group in groups:
+            # Hent grupper for hvert barn
+            all_groups = []
+            for rel_id in relatives:
+                groups = await self._get_groups(client, rel_id)
+                all_groups.extend(groups)
+            if not relatives:
+                all_groups = await self._get_groups(client, self.user_id)
+            logger.info(f"Showbie: fant {len(all_groups)} grupper")
+
+            for group in all_groups:
                 group_id = group.get("id")
                 group_name = group.get("name", "Showbie")
                 if not group_id:
@@ -89,13 +98,33 @@ class ShowbieService:
 
         return results
 
-    async def _get_groups(self, client) -> list:
+    async def _get_relatives(self, client) -> list:
+        """Henter barn/relatives tilknyttet foreldrekontoen."""
+        try:
+            r = await client.get(
+                f"{self.base_url}/users/{self.user_id}/relatives",
+                headers=self._auth_headers()
+            )
+            logger.info(f"Showbie relatives status: {r.status_code}")
+            if r.status_code == 200:
+                data = r.json()
+                relatives = data.get("relatives", [])
+                return [rel.get("id") for rel in relatives if rel.get("id")]
+            else:
+                logger.error(f"Showbie relatives feil: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            logger.error(f"Showbie relatives feilet: {e}")
+        return []
+
+    async def _get_groups(self, client, user_id: str = None) -> list:
         try:
             headers = self._auth_headers()
-            logger.info(f"Showbie groups URL: {self.base_url}/users/{self.user_id}/groups")
+            uid = user_id or self.user_id
+            logger.info(f"Showbie groups URL: {self.base_url}/users/{uid}/groups")
             logger.info(f"Showbie auth: {headers.get('Authorization','')[:40]}...")
+            uid = user_id or self.user_id
             r = await client.get(
-                f"{self.base_url}/users/{self.user_id}/groups",
+                f"{self.base_url}/users/{uid}/groups",
                 headers=headers
             )
             logger.info(f"Showbie groups status: {r.status_code}")
