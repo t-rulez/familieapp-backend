@@ -62,6 +62,10 @@ async def init_user_tables():
                 email_2_source        TEXT DEFAULT 'showbie',
                 email_2_category      TEXT DEFAULT 'skole',
                 email_2_enabled       BOOLEAN DEFAULT FALSE,
+                showbie_token         TEXT,
+                showbie_user_id       TEXT,
+                showbie_token_expires BIGINT,
+                showbie_enabled       BOOLEAN DEFAULT FALSE,
                 wa_group_filter       TEXT,
                 wa_category           TEXT DEFAULT 'foreldre',
                 wa_source_label       TEXT DEFAULT 'WhatsApp',
@@ -99,6 +103,10 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS caldav_username TEXT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS caldav_password TEXT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS caldav_calendars TEXT DEFAULT ''")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_token TEXT")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_user_id TEXT")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_token_expires BIGINT")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_enabled BOOLEAN DEFAULT FALSE")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
@@ -230,7 +238,11 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
                 spond_password IS NOT NULL AND spond_password != '' AS spond_has_password,
                 email_1_password IS NOT NULL AND email_1_password != '' AS email_1_has_password,
                 email_2_password IS NOT NULL AND email_2_password != '' AS email_2_has_password,
-                caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password
+                caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password,
+                showbie_token IS NOT NULL AND showbie_token != '' AS showbie_has_token,
+                showbie_token_expires,
+                showbie_user_id,
+                showbie_enabled
             FROM user_settings WHERE user_id = $1
         """, user_id)
     if row:

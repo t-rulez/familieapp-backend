@@ -102,6 +102,20 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             logger.error(f"Spond-synk feilet: {e}")
             return []
 
+    async def fetch_showbie():
+        if not (user.get("showbie_enabled") and user.get("showbie_token") and user.get("showbie_user_id")):
+            return []
+        try:
+            from showbie_service import ShowbieService
+            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"])
+            msgs = await svc.fetch_all(since=since)
+            for m in msgs: m["user_id"] = user_id
+            logger.info(f"Showbie: {len(msgs)} meldinger")
+            return msgs
+        except Exception as e:
+            logger.error(f"Showbie-synk feilet: {e}")
+            return []
+
     async def fetch_email(num):
         if not (user.get(f"email_{num}_enabled") and user.get(f"email_{num}_username")):
             return []
@@ -121,6 +135,7 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
         fetch_spond(),
         fetch_email(1),
         fetch_email(2),
+        fetch_showbie(),
         return_exceptions=True
     )
 
@@ -290,6 +305,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "email_2_source_label", "email_2_source", "email_2_category", "email_2_enabled",
         "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
+        "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled",
         "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -602,6 +618,20 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
 
     total = results["spond"] + results["email1"] + results["email2"] + results["whatsapp"]
     return {"ok": True, "total": total, "details": results}
+
+@app.post("/showbie/test")
+async def test_showbie(user: CurrentUser):
+    settings = await get_user_settings(user["id"])
+    token = settings.get("showbie_token", "")
+    user_id = settings.get("showbie_user_id", "")
+    if not token:
+        raise HTTPException(status_code=400, detail="Showbie token ikke konfigurert")
+    from showbie_service import test_showbie_connection
+    result = await test_showbie_connection(token, user_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=401, detail=result.get("error", "Tilkobling feilet"))
+    return result
+
 
 @app.get("/caldav/calendars")
 async def list_calendars(user: CurrentUser):
