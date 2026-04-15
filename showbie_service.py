@@ -83,7 +83,7 @@ class ShowbieService:
                         posts = await self._get_folder_posts(client, folder_id)
                         for post in posts:
                             msg = await self._normalize_post(
-                                client, post, aname, group_name, folder_name, due
+                                client, post, aname, assignment["_group_name"], folder_name, due
                             )
                             if msg:
                                 results.append(msg)
