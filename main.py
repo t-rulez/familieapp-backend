@@ -819,7 +819,12 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     if not api_key:
         raise HTTPException(status_code=503, detail="AI ikke konfigurert")
 
-    words = [w.lower() for w in req.question.split() if len(w) > 2]
+    # Fjern kun veldig korte ord og vanlige stopwords
+    stopwords = {'jeg', 'deg', 'han', 'hun', 'den', 'det', 'de', 'vi', 'dere', 'ikke', 'har',
+                 'er', 'var', 'blir', 'ble', 'vil', 'kan', 'skal', 'skulle', 'ville', 'være',
+                 'med', 'for', 'til', 'fra', 'på', 'av', 'om', 'og', 'eller', 'men', 'som',
+                 'hva', 'når', 'hvor', 'hvem', 'hvilken', 'noe', 'noen'}
+    words = [w.lower().strip('?.,!') for w in req.question.split() if len(w) > 2 and w.lower() not in stopwords]
 
     from database import get_pool
     import json as _json
@@ -858,7 +863,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
         return sum(1 for w in words if w in text)
 
-    relevant = sorted(relevant, key=score_msg, reverse=True)[:50]
+    relevant = sorted(relevant, key=score_msg, reverse=True)[:100]
     if not relevant:
         relevant = await get_all_messages(user_id=user["id"], limit=10)
 
@@ -868,7 +873,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         if m.get('tldr'):
             parts.append(f"Sammendrag: {m['tldr']}")
         if m.get('body') and m['body'] != m.get('tldr',''):
-            body_preview = m['body'][:300] + ('...' if len(m['body']) > 300 else '')
+            body_preview = m['body'][:1000] + ('...' if len(m['body']) > 1000 else '')
             parts.append(f"Innhold: {body_preview}")
         return "\n".join(parts)
 
