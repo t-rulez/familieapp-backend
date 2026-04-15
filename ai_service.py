@@ -85,7 +85,7 @@ Melding: {body[:800]}
 
 Svar med bare oppsummeringsteksten, ingen forklaring."""
 
-        tldr = await _call_claude(system, user, max_tokens=150)
+        tldr, tokens_in, tokens_out = await _call_claude(system, user, max_tokens=150)
         # Rens eventuelle anførselstegn
         tldr = tldr.strip('"\'')
         return tldr[:200]
@@ -231,7 +231,7 @@ Skriv en kort profil som starter med "Brukeren bryr seg om:" og inkluderer "Igno
 Eksempel: "Bryr seg om: avlysninger, foreldremøter, dugnad. Ignorerer: generelle nyhetsbrev, rutinemeldinger."
 """
 
-        profile = await _call_claude(system, user_prompt, max_tokens=150)
+        profile, _, _ = await _call_claude(system, user_prompt, max_tokens=150)
         return profile.strip('"\'')
 
     except Exception as e:
