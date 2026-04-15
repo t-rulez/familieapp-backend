@@ -160,12 +160,21 @@ class ShowbieService:
 
     async def _get_assignments(self, client, group_id: str) -> list:
         try:
+            # Prøv klasse-endepunktet
             r = await client.get(
-                f"{self.base_url}/groups/{group_id}/assignments",
+                f"{self.base_url}/classes/{group_id}/assignments",
                 headers=self._auth_headers()
             )
             if r.status_code == 200:
                 return r.json().get("assignments", [])
+            # Fallback: prøv via bruker
+            r2 = await client.get(
+                f"{self.base_url}/users/{self.user_id}/classes/{group_id}/assignments",
+                headers=self._auth_headers()
+            )
+            if r2.status_code == 200:
+                return r2.json().get("assignments", [])
+            logger.error(f"Showbie assignments {group_id}: {r.status_code}, {r2.status_code} - {r.text[:100]}")
         except Exception as e:
             logger.error(f"Showbie assignments feilet: {e}")
         return []
