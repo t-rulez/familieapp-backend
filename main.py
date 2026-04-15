@@ -629,7 +629,7 @@ async def test_showbie(user: CurrentUser):
     from showbie_service import test_showbie_connection
     result = await test_showbie_connection(token, user_id)
     if not result["ok"]:
-        raise HTTPException(status_code=401, detail=result.get("error", "Tilkobling feilet"))
+        raise HTTPException(status_code=400, detail=result.get("error", "Tilkobling feilet"))
     return result
 
 
