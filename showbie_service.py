@@ -42,19 +42,16 @@ class ShowbieService:
         """Henter alle relevante meldinger fra Showbie."""
         results = []
         async with httpx.AsyncClient(timeout=60) as client:
-            # Hent barn-IDer fra /users/me
-            child_ids = await self._get_child_ids(client)
-            logger.info(f"Showbie: fant {len(child_ids)} barn")
+            # Hent klasser direkte via forelder-kontoen
+            classes = await self._get_classes(client)
+            logger.info(f"Showbie: fant {len(classes)} klasser")
 
-            all_groups = []
-            for child_id in child_ids:
-                groups = await self._get_groups(client, child_id)
-                all_groups.extend(groups)
-            logger.info(f"Showbie: fant {len(all_groups)} grupper")
-
-            for group in all_groups:
+            for group in classes:
                 group_id = group.get("id")
                 group_name = group.get("name", "Showbie")
+                year_group = group.get("yearGroup", "")
+                if year_group:
+                    group_name = f"{group_name} ({year_group}. trinn)" if group_name and str(year_group) not in group_name else group_name
                 if not group_id:
                     continue
 
@@ -95,6 +92,21 @@ class ShowbieService:
                                 results.append(msg)
 
         return results
+
+    async def _get_classes(self, client) -> list:
+        """Henter klasser direkte fra foreldrekontoen."""
+        try:
+            r = await client.get(
+                f"{self.base_url}/users/{self.user_id}/classes",
+                headers=self._auth_headers()
+            )
+            if r.status_code == 200:
+                return r.json().get("classes", [])
+            else:
+                logger.error(f"Showbie classes feil: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            logger.error(f"Showbie classes feilet: {e}")
+        return []
 
     async def _get_child_ids(self, client) -> list:
         """Henter barn-IDer fra /users/me metadata."""
