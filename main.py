@@ -354,12 +354,13 @@ async def send_evening_summary(user: dict):
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
-        f"Skriv en ULTRAKORТ oversikt over i morgen ({tomorrow_str}).\n"
-        f"Format: Maks 6 linjer. Stikkord per person, f.eks:\n"
-        f"Gustav: Svomming pa skole. Fotballtrening kl 17:20.\n"
-        f"Rasmus: Vanlig skoledag.\n"
-        f"Annet: [fellesaktiviteter eller viktig forberedelse i dag]\n"
-        f"Ingen ekstra forklaringer. Kun det viktigste. Svar pa norsk."
+        f"Skriv en ULTRAKORT oversikt over i morgen ({tomorrow_str}).\n"
+        f"VIKTIG: Ikke skriv dato eller overskrift - start direkte med innholdet.\n"
+        f"Format - kun stikkord, maks 4 linjer total:\n"
+        f"[Navn]: [aktivitet kl XX:XX]. [aktivitet].\n"
+        f"[Navn]: [aktivitet].\n"
+        f"[Annet/Familien]: [fellesting eller forberedelse].\n"
+        f"Ingen lister med bindestrek. Ingen 'Forbered i dag'-seksjon. Kun det viktigste. Svar pa norsk."
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
