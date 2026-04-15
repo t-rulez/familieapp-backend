@@ -38,22 +38,23 @@ class ShowbieService:
             "Authorization": f"sbe token={self._token_b64},fp={fp_b64}",
         }
 
-    async def fetch_all(self, since: datetime = None) -> list[dict]:
-        """Henter alle relevante meldinger fra Showbie."""
+    async def fetch_all(self, since: datetime = None, upsert_fn=None, user_id: str = None, existing_ids: set = None) -> list[dict]:
+        """Henter alle relevante meldinger fra Showbie.
+        upsert_fn: async funksjon for å lagre meldinger fortløpende
+        existing_ids: sett med allerede lagrede message-IDer (hopp over Claude Vision)
+        """
         results = []
-        async with httpx.AsyncClient(timeout=60) as client:
-            # Hent klasser for å få gruppenavn
+        existing_ids = existing_ids or set()
+        async with httpx.AsyncClient(timeout=120) as client:
             classes = await self._get_classes(client)
             class_map = {c["id"]: c for c in classes}
-            logger.info(f"[SHOWBIE] : fant {len(classes)} klasser")
+            logger.info(f"[SHOWBIE] Fant {len(classes)} klasser")
 
-            # Hent assignments via hvert barn sin ID
             for child_id in self.child_ids:
                 assignments = await self._get_child_assignments(client, child_id)
-                logger.info(f"[SHOWBIE]  barn {child_id[:8]}: {len(assignments)} assignments")
+                logger.info(f"[SHOWBIE] Barn {child_id[:8]}: {len(assignments)} assignments")
 
                 for assignment in assignments:
-                    # Finn gruppenavn fra class_map
                     class_id = assignment.get("class", "")
                     group = class_map.get(class_id, {})
                     assignment["_group_name"] = group.get("name", "Showbie")
@@ -66,7 +67,7 @@ class ShowbieService:
                     if not aid:
                         continue
 
-                    # Filtrer på dato
+                    # Filtrer på dato – hopp over gamle assignments
                     if since and modified:
                         mod_dt = datetime.fromtimestamp(modified / 1000, tz=timezone.utc)
                         if mod_dt < since:
@@ -79,14 +80,31 @@ class ShowbieService:
                         if not folder_id:
                             continue
 
-                        # Hent filer i mappen
                         posts = await self._get_folder_posts(client, folder_id)
                         for post in posts:
+                            # Sjekk om meldingen allerede finnes (hopp over Claude Vision)
+                            file_name = post.get("fileName", post.get("name", ""))
+                            created = post.get("createdDateStamp", 0)
+                            post_id = f"showbie-{file_name.replace('.','_')}-{created}"
+
+                            if post_id in existing_ids:
+                                # Allerede i DB – hopp over
+                                continue
+
                             msg = await self._normalize_post(
                                 client, post, aname, assignment["_group_name"], folder_name, due
                             )
                             if msg:
+                                if user_id:
+                                    msg["user_id"] = user_id
                                 results.append(msg)
+                                # Lagre fortløpende
+                                if upsert_fn:
+                                    try:
+                                        await upsert_fn([msg])
+                                        logger.info(f"[SHOWBIE] Lagret: {msg['title'][:50]}")
+                                    except Exception as e:
+                                        logger.error(f"[SHOWBIE] Lagring feilet: {e}")
 
         return results
 

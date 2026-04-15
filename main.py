@@ -56,7 +56,7 @@ CurrentUser = Annotated[dict, Depends(get_current_user)]
 async def run_ai_processing(user_id: str):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return
-    unprocessed = await get_unprocessed_messages(limit=5, user_id=user_id)
+    unprocessed = await get_unprocessed_messages(limit=20, user_id=user_id)
     if not unprocessed:
         return
     logger.info(f"[AI] Behandler {len(unprocessed)} meldinger for bruker {user_id[:8]}...")
@@ -108,11 +108,19 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             return []
         try:
             from showbie_service import ShowbieService
+            from database import get_pool
             child_ids = [c.strip() for c in (user.get("showbie_child_ids") or "").split(",") if c.strip()]
             svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids)
-            msgs = await svc.fetch_all(since=since)
-            for m in msgs: m["user_id"] = user_id
-            logger.info(f"[SHOWBIE] {len(msgs)} meldinger hentet")
+            # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id FROM messages WHERE user_id = $1 AND source = 'showbie'", user_id
+                )
+            existing_ids = {r["id"] for r in rows}
+            logger.info(f"[SHOWBIE] {len(existing_ids)} eksisterende meldinger i DB")
+            msgs = await svc.fetch_all(since=since, upsert_fn=upsert_messages, user_id=user_id, existing_ids=existing_ids)
+            logger.info(f"[SHOWBIE] {len(msgs)} nye meldinger hentet")
             return msgs
         except Exception as e:
             logger.error(f"[SHOWBIE] Synk feilet: {e}")
