@@ -107,7 +107,8 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             return []
         try:
             from showbie_service import ShowbieService
-            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""))
+            child_ids = [c.strip() for c in (user.get("showbie_child_ids") or "").split(",") if c.strip()]
+            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids)
             msgs = await svc.fetch_all(since=since)
             for m in msgs: m["user_id"] = user_id
             logger.info(f"Showbie: {len(msgs)} meldinger")
