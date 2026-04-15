@@ -23,20 +23,18 @@ MONTHS_NO = ["januar","februar","mars","april","mai","juni","juli","august","sep
 
 
 class ShowbieService:
-    def __init__(self, token: str, user_id: str):
+    def __init__(self, token: str, user_id: str, fingerprint: str = ""):
         self.token = token
         self.user_id = user_id
+        self.fingerprint = fingerprint or "brief-default-fp"
         self.base_url = "https://eu.showbie.com/core/v5"
-        self.headers = {
-            **SHOWBIE_HEADERS,
-            "Authorization": f"sbe token={base64.b64encode(token.encode()).decode()},fp=brief-server",
-        }
+        self._token_b64 = base64.b64encode(token.encode()).decode()
 
     def _auth_headers(self):
-        # token is already base64 from localStorage
+        fp_b64 = base64.b64encode(self.fingerprint.encode()).decode()
         return {
             **SHOWBIE_HEADERS,
-            "Authorization": f"sbe token={self.token},fp=brief-server",
+            "Authorization": f"sbe token={self._token_b64},fp={fp_b64}",
         }
 
     async def fetch_all(self, since: datetime = None) -> list[dict]:
@@ -248,11 +246,14 @@ class ShowbieService:
         return ""
 
 
-async def test_showbie_connection(token: str, user_id: str) -> dict:
+async def test_showbie_connection(token: str, user_id: str, fingerprint: str = "") -> dict:
     """Tester Showbie-tilkobling og returnerer brukerinfo."""
+    token_b64 = base64.b64encode(token.encode()).decode()
+    fp_raw = fingerprint or "brief-default-fp"
+    fp_b64 = base64.b64encode(fp_raw.encode()).decode()
     headers = {
         **SHOWBIE_HEADERS,
-        "Authorization": f"sbe token={token},fp=brief-server",
+        "Authorization": f"sbe token={token_b64},fp={fp_b64}",
     }
     try:
         async with httpx.AsyncClient(timeout=15) as client:

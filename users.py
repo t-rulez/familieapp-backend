@@ -66,6 +66,7 @@ async def init_user_tables():
                 showbie_user_id       TEXT,
                 showbie_token_expires BIGINT,
                 showbie_enabled       BOOLEAN DEFAULT FALSE,
+                showbie_fingerprint    TEXT,
                 wa_group_filter       TEXT,
                 wa_category           TEXT DEFAULT 'foreldre',
                 wa_source_label       TEXT DEFAULT 'WhatsApp',
@@ -107,6 +108,7 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_user_id TEXT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_token_expires BIGINT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_enabled BOOLEAN DEFAULT FALSE")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_fingerprint TEXT")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection

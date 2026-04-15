@@ -107,7 +107,7 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             return []
         try:
             from showbie_service import ShowbieService
-            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"])
+            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""))
             msgs = await svc.fetch_all(since=since)
             for m in msgs: m["user_id"] = user_id
             logger.info(f"Showbie: {len(msgs)} meldinger")
@@ -305,7 +305,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "email_2_source_label", "email_2_source", "email_2_category", "email_2_enabled",
         "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
-        "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled",
+        "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint",
         "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -627,7 +627,8 @@ async def test_showbie(user: CurrentUser):
     if not token:
         raise HTTPException(status_code=400, detail="Showbie token ikke konfigurert")
     from showbie_service import test_showbie_connection
-    result = await test_showbie_connection(token, user_id)
+    fingerprint = settings.get("showbie_fingerprint", "")
+    result = await test_showbie_connection(token, user_id, fingerprint)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result.get("error", "Tilkobling feilet"))
     return result
