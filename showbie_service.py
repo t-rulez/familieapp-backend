@@ -42,24 +42,22 @@ class ShowbieService:
         """Henter alle relevante meldinger fra Showbie."""
         results = []
         async with httpx.AsyncClient(timeout=60) as client:
-            # Hent klasser direkte via forelder-kontoen
+            # Hent klasser for å få gruppenavn
             classes = await self._get_classes(client)
+            class_map = {c["id"]: c for c in classes}
             logger.info(f"Showbie: fant {len(classes)} klasser")
 
-            for group in classes:
-                group_id = group.get("id")
-                group_name = group.get("name", "Showbie")
-                year_group = group.get("yearGroup", "")
-                if year_group:
-                    group_name = f"{group_name} ({year_group}. trinn)" if group_name and str(year_group) not in group_name else group_name
-                if not group_id:
-                    continue
-
-                # Hent assignments for gruppen
-                assignments = await self._get_assignments(client, group_id)
-                logger.info(f"  Gruppe '{group_name}': {len(assignments)} assignments")
+            # Hent assignments via hvert barn sin ID
+            for child_id in self.child_ids:
+                assignments = await self._get_child_assignments(client, child_id)
+                logger.info(f"Showbie barn {child_id[:8]}: {len(assignments)} assignments")
 
                 for assignment in assignments:
+                    # Finn gruppenavn fra class_map
+                    class_id = assignment.get("class", "")
+                    group = class_map.get(class_id, {})
+                    assignment["_group_name"] = group.get("name", "Showbie")
+                    assignment["_child_id"] = child_id
                     aid = assignment.get("id")
                     aname = assignment.get("name", "Oppgave")
                     modified = assignment.get("sortDateStamp", 0)
@@ -74,8 +72,7 @@ class ShowbieService:
                         if mod_dt < since:
                             continue
 
-                    # Hent folders (én per elev + lærer)
-                    folders = await self._get_folders(client, aid)
+                    folders = await self._get_folders(client, aid, child_id)
                     for folder in folders:
                         folder_id = folder.get("id")
                         folder_name = folder.get("name", "")
@@ -92,6 +89,20 @@ class ShowbieService:
                                 results.append(msg)
 
         return results
+
+    async def _get_child_assignments(self, client, child_id: str) -> list:
+        """Henter assignments for et barn via barnets user_id."""
+        try:
+            r = await client.get(
+                f"{self.base_url}/users/{child_id}/assignments",
+                headers=self._auth_headers()
+            )
+            if r.status_code == 200:
+                return r.json().get("assignments", [])
+            logger.error(f"Showbie child assignments {child_id[:8]}: {r.status_code} {r.text[:100]}")
+        except Exception as e:
+            logger.error(f"Showbie child assignments feilet: {e}")
+        return []
 
     async def _get_classes(self, client) -> list:
         """Henter klasser direkte fra foreldrekontoen."""
@@ -179,14 +190,22 @@ class ShowbieService:
             logger.error(f"Showbie assignments feilet: {e}")
         return []
 
-    async def _get_folders(self, client, assignment_id) -> list:
+    async def _get_folders(self, client, assignment_id, child_id: str = None) -> list:
         try:
-            r = await client.get(
-                f"{self.base_url}/assignments/{assignment_id}/folders",
-                headers=self._auth_headers()
-            )
+            # Hent kun barnets mappe hvis child_id er kjent
+            if child_id:
+                r = await client.get(
+                    f"{self.base_url}/assignments/{assignment_id}/folders?student={child_id}",
+                    headers=self._auth_headers()
+                )
+            else:
+                r = await client.get(
+                    f"{self.base_url}/assignments/{assignment_id}/folders",
+                    headers=self._auth_headers()
+                )
             if r.status_code == 200:
                 return r.json().get("folders", [])
+            logger.error(f"Showbie folders {assignment_id}: {r.status_code}")
         except Exception as e:
             logger.error(f"Showbie folders feilet: {e}")
         return []
