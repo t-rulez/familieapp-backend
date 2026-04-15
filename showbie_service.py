@@ -263,13 +263,17 @@ class ShowbieService:
             if preview_url:
                 content_text = await self._extract_content_from_preview(client, preview_url, assignment_name, file_name)
 
+            # Hopp over meldinger uten filnavn og uten innhold
+            if not file_name and not content_text:
+                return None
+
             body = f"Fil: {file_name}\nOppgave: {assignment_name}\nKlasse: {group_name}"
             if folder_name:
                 body += f"\nMappe: {folder_name}"
             if content_text:
                 body += f"\n\nInnhold:\n{content_text}"
 
-            title = f"{assignment_name}: {file_name}"
+            title = f"{assignment_name}: {file_name}".rstrip(": ").rstrip()
             tldr = content_text[:120] if content_text else f"{assignment_name} – {file_name}"
 
             return {
