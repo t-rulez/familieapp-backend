@@ -233,6 +233,143 @@ async def sync_loop():
         await asyncio.sleep(30 * 60)
 
 
+async def evening_summary_loop():
+    """Sender kveldssammendrag kl 20:00 norsk tid hver dag."""
+    import pytz
+    oslo_tz = pytz.timezone("Europe/Oslo")
+    sent_today = set()  # user_ids som har fått varsel i dag
+
+    while True:
+        try:
+            now_oslo = datetime.now(oslo_tz)
+            today_key = now_oslo.strftime("%Y-%m-%d")
+
+            # Reset sendte varsler ved midnatt
+            if today_key not in sent_today:
+                sent_today = set()
+
+            if now_oslo.hour == 20 and now_oslo.minute == 0:
+                logger.info("[EVENING] Sender kveldssammendrag...")
+                users = await get_all_active_users()
+                for user in users:
+                    uid = user["id"]
+                    if uid in sent_today:
+                        continue
+                    if not user.get("evening_summary_enabled"):
+                        continue
+                    sent_today.add(uid)
+                    try:
+                        await send_evening_summary(user)
+                    except Exception as e:
+                        logger.error(f"[EVENING] Feilet for {uid}: {e}")
+                await asyncio.sleep(60)  # unngå dobbelt-kjøring
+            else:
+                await asyncio.sleep(30)  # sjekk hvert 30. sekund
+        except Exception as e:
+            logger.error(f"[EVENING] Loop feilet: {e}")
+            await asyncio.sleep(60)
+
+
+async def send_evening_summary(user: dict):
+    """Genererer og sender morgendagens oversikt til en bruker."""
+    uid = user["id"]
+    subs = await get_push_subscriptions(uid)
+    if not subs:
+        return
+
+    # Generer morgendagens oversikt via AI
+    question = "Hva skjer i morgen? Gi meg en oversikt over arrangementer, meldinger og viktige ting for i morgen. Svar kort og konsist, maks 5-6 setninger."
+
+    words = [w.lower().strip('?.,!') for w in question.split() if len(w) > 3]
+    stopwords = {'hva', 'skjer', 'meg', 'over', 'for', 'maks', 'svar', 'kort'}
+    words = [w for w in words if w not in stopwords]
+
+    from database import get_pool
+    import json as _json
+    pool = await get_pool()
+    seen_ids = set()
+    relevant = []
+
+    sql = (
+        "SELECT id, source, source_label, category, title, tldr, body,"
+        " time_label AS time, timestamp, priority, status, meta"
+        " FROM messages WHERE user_id = $1"
+        " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2)"
+        " ORDER BY timestamp DESC LIMIT 50"
+    )
+    async with pool.acquire() as conn:
+        for word in words:
+            rows = await conn.fetch(sql, uid, f"%{word}%")
+            for row in rows:
+                m = dict(row)
+                if m["id"] not in seen_ids:
+                    seen_ids.add(m["id"])
+                    relevant.append(m)
+
+    # Hent også de siste 20 meldingene uansett
+    recent = await get_all_messages(user_id=uid, limit=20)
+    for m in recent:
+        if m["id"] not in seen_ids:
+            seen_ids.add(m["id"])
+            relevant.append(m)
+
+    def fmt(m):
+        parts = [f"[{m.get('source_label','?')} - {m.get('time','')}] {m['title']}"]
+        if m.get('tldr'):
+            parts.append(f"  {m['tldr']}")
+        if m.get('body'):
+            parts.append(f"  {m['body'][:500]}")
+        return "\n".join(parts)
+
+    msg_context = "\n\n".join([fmt(m) for m in relevant[:40]])
+
+    from datetime import date as _date
+    today = _date.today()
+    days_no = ["mandag","tirsdag","onsdag","torsdag","fredag","lørdag","søndag"]
+    months_no = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
+    today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
+
+    settings = await get_user_settings(uid)
+    family_ctx = settings.get("family_context", "") if settings else ""
+
+    system = f"""Du er en familieassistent. Dagens dato er {today_str}.
+{f"FAMILIEPROFIL: {family_ctx}" if family_ctx else ""}
+
+Her er meldinger og informasjon fra familie-appen:
+{msg_context}
+
+Svar kun på norsk. Vær kort og konkret."""
+
+    import httpx, os
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 400,
+                  "system": system, "messages": [{"role": "user", "content": question}]}
+        )
+        if resp.status_code != 200:
+            return
+        answer = resp.json()["content"][0]["text"].strip()
+
+    # Rens markdown for push-notifikasjon
+    import re
+    clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
+    clean = re.sub(r'\*(.+?)\*', r'\1', clean)
+    clean = re.sub(r'#{1,3} ', '', clean)
+
+    # Begrens til 3000 tegn (web push grense)
+    if len(clean) > 3000:
+        clean = clean[:2950] + "..."
+
+    logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:60]}...")
+    await send_push_to_user(subs, "📅 Morgendagens oversikt", clean, "evening-summary")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -249,8 +386,10 @@ async def lifespan(app: FastAPI):
         logger.error(f"FATAL: Tabellinitialisering feilet: {e}", exc_info=True)
         raise
     task = asyncio.create_task(sync_loop())
+    task2 = asyncio.create_task(evening_summary_loop())
     yield
     task.cancel()
+    task2.cancel()
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 
@@ -334,6 +473,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
+        "evening_summary_enabled",
         "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -873,7 +1013,8 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         if m.get('tldr'):
             parts.append(f"Sammendrag: {m['tldr']}")
         if m.get('body') and m['body'] != m.get('tldr',''):
-            body_preview = m['body'][:1000] + ('...' if len(m['body']) > 1000 else '')
+            max_body = 2000 if m.get('source') == 'showbie' else 800
+            body_preview = m['body'][:max_body] + ('...' if len(m['body']) > max_body else '')
             parts.append(f"Innhold: {body_preview}")
         return "\n".join(parts)
 

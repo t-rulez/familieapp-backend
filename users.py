@@ -110,6 +110,7 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_enabled BOOLEAN DEFAULT FALSE")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_fingerprint TEXT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_child_ids TEXT DEFAULT ''")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_enabled BOOLEAN DEFAULT FALSE")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
