@@ -111,6 +111,7 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_fingerprint TEXT")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_child_ids TEXT DEFAULT ''")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_enabled BOOLEAN DEFAULT FALSE")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_time TEXT DEFAULT '20:00'")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
@@ -300,7 +301,8 @@ async def get_all_active_users() -> list[dict]:
                 s.email_2_delete_after, s.email_2_source_label, s.email_2_source,
                 s.email_2_category, s.email_2_enabled,
                 s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
-                s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled, s.showbie_child_ids
+                s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled, s.showbie_child_ids,
+                s.evening_summary_enabled, s.evening_summary_time
             FROM users u
             JOIN user_settings s ON u.id = s.user_id
             WHERE s.spond_enabled = TRUE
@@ -308,6 +310,7 @@ async def get_all_active_users() -> list[dict]:
                OR s.email_2_enabled = TRUE
                OR s.wa_enabled = TRUE
                OR s.showbie_enabled = TRUE
+               OR s.evening_summary_enabled = TRUE
         """)
 
     users = []

@@ -248,23 +248,28 @@ async def evening_summary_loop():
             if today_key not in sent_today:
                 sent_today = set()
 
-            if now_oslo.hour == 20 and now_oslo.minute == 0:
-                logger.info("[EVENING] Sender kveldssammendrag...")
-                users = await get_all_active_users()
-                for user in users:
-                    uid = user["id"]
-                    if uid in sent_today:
-                        continue
-                    if not user.get("evening_summary_enabled"):
-                        continue
+            # Sjekk alle brukere med evening_summary_enabled
+            users = await get_all_active_users()
+            for user in users:
+                if not user.get("evening_summary_enabled"):
+                    continue
+                uid = user["id"]
+                if uid in sent_today:
+                    continue
+                # Hent konfigurert tidspunkt (standard 20:00)
+                time_str = user.get("evening_summary_time") or "20:00"
+                try:
+                    h, m = int(time_str.split(":")[0]), int(time_str.split(":")[1])
+                except Exception:
+                    h, m = 20, 0
+                if now_oslo.hour == h and now_oslo.minute == m:
+                    logger.info(f"[EVENING] Sender til {uid[:8]}...")
                     sent_today.add(uid)
                     try:
                         await send_evening_summary(user)
                     except Exception as e:
                         logger.error(f"[EVENING] Feilet for {uid}: {e}")
-                await asyncio.sleep(60)  # unngå dobbelt-kjøring
-            else:
-                await asyncio.sleep(30)  # sjekk hvert 30. sekund
+            await asyncio.sleep(30)
         except Exception as e:
             logger.error(f"[EVENING] Loop feilet: {e}")
             await asyncio.sleep(60)
@@ -473,7 +478,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
-        "evening_summary_enabled",
+        "evening_summary_enabled", "evening_summary_time",
         "family_context", "ai_learned_context"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
