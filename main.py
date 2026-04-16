@@ -388,7 +388,9 @@ async def send_evening_summary(user: dict):
         clean = clean[:2950] + "..."
 
     logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:80]}...")
-    await send_push_to_user(subs, f"Morgendagens oversikt - {tomorrow_str}", clean, "evening-summary")
+    short_date = tomorrow.strftime("%-d. %b").lower()
+    short_day = days_no[tomorrow.weekday()][:3]
+    await send_push_to_user(subs, f"I morgen: {short_day} {short_date}", clean, "evening-summary")
 
 
 
