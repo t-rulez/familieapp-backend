@@ -291,7 +291,7 @@ async def send_evening_summary(user: dict):
     today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
     tomorrow_str = f"{days_no[tomorrow.weekday()]} {tomorrow.day}. {months_no[tomorrow.month-1]} {tomorrow.year}"
 
-    question = f"Gi meg en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter. Ta med hva vi bor forberede i dag. Maks 5-6 setninger."
+    question = f"Gi meg en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter. Maks 5-6 setninger. Ikke ta med forberedelser, ikke lag oppsummering. Kun kort svar."
 
     stopwords = {"jeg","deg","han","hun","den","det","de","vi","ikke","har","er","var",
                  "med","for","til","fra","pa","av","om","og","eller","men","som","hva","nar"}
@@ -351,15 +351,9 @@ async def send_evening_summary(user: dict):
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
-        f"Svar KUN i dette formatet - ingen andre ord:\n"
-        f"[Navn]: [stikkord]. [stikkord kl XX].\n"
-        f"[Navn]: [stikkord].\n"
-        f"Husk: [stikkord]. [stikkord].\n\n"
-        f"Eksempel pa RIKTIG svar:\n"
-        f"Gustav: Svomming. Fotball kl 17:20.\n"
-        f"Rasmus: Vanlig skole.\n"
-        f"Husk: Pakk sekk. Svommeutstyr.\n\n"
-        f"Maks 4 linjer. KUN stikkord - aldri setninger. Ingen dato. Ingen forklaringer."
+        f"Gi en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter.\n"
+        f"Maks 5-6 korte punkter. Ikke ta med forberedelser. Ikke lag oppsummering. Kun kort svar.\n"
+        f"Svar pa norsk."
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
