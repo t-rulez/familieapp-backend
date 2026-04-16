@@ -398,7 +398,8 @@ async def send_evening_summary(user: dict):
         lines.append(line)
     clean = "\n".join(lines[:5])  # Maks 5 linjer
 
-    logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:80]}...")
+    logger.info(f"[EVENING] Prompt:\n---QUESTION---\n{question}\n---SYSTEM (siste 500 tegn)---\n{system[-500:]}\n---")
+    logger.info(f"[EVENING] Resultat:\n{clean}")
     short_date = tomorrow.strftime("%-d. %b").lower()
     short_day = days_no[tomorrow.weekday()][:3]
     await send_push_to_user(subs, f"I morgen: {short_day} {short_date}", clean, "evening-summary")
