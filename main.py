@@ -354,12 +354,12 @@ async def send_evening_summary(user: dict):
         f"Svar KUN i dette formatet - ingen andre ord:\n"
         f"[Navn]: [stikkord]. [stikkord kl XX].\n"
         f"[Navn]: [stikkord].\n"
-        f"[Annet]: [stikkord].\n\n"
+        f"Husk: [stikkord]. [stikkord].\n\n"
         f"Eksempel pa RIKTIG svar:\n"
         f"Gustav: Svomming. Fotball kl 17:20.\n"
         f"Rasmus: Vanlig skole.\n"
-        f"Annet: Batloft fredag - pakk i dag.\n\n"
-        f"Maks 4 linjer. Kun navn og stikkord. Ingen setninger. Ingen dato."
+        f"Husk: Pakk sekk. Svommeutstyr.\n\n"
+        f"Maks 4 linjer. KUN stikkord - aldri setninger. Ingen dato. Ingen forklaringer."
     )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
