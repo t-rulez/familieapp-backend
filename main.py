@@ -381,11 +381,22 @@ async def send_evening_summary(user: dict):
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
     clean = re.sub(r'#{1,3} ', '', clean)
-    # Fjern dato-linjer som Claude legger til uansett instruksjon
+    # Fjern dato-linjer
     clean = re.sub(r'^.{0,30}\d{1,2}\.\s*\w+\s*\d{4}[:\s]*\n?', '', clean, flags=re.MULTILINE)
-    clean = clean.strip()
-    if len(clean) > 3000:
-        clean = clean[:2950] + "..."
+    # Håndhev stikkord-format: kutt linjer over 55 tegn ved første punktum
+    lines = []
+    for line in clean.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) > 55:
+            dot = line.find('.', 15)
+            if 15 < dot < 60:
+                line = line[:dot+1]
+            else:
+                line = line[:53] + ".."
+        lines.append(line)
+    clean = "\n".join(lines[:5])  # Maks 5 linjer
 
     logger.info(f"[EVENING] Sender til {uid[:8]}: {clean[:80]}...")
     short_date = tomorrow.strftime("%-d. %b").lower()
