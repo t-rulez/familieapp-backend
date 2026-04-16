@@ -345,11 +345,28 @@ async def send_evening_summary(user: dict):
     family_ctx = settings.get("family_context", "") if settings else ""
     auto_ctx = settings.get("ai_learned_context", "") if settings else ""
 
+    # Hent kalenderdata – samme som AI-assistenten
+    calendar_section = ""
+    if settings and settings.get("caldav_enabled") and settings.get("caldav_username") and settings.get("caldav_password"):
+        try:
+            from caldav_service import fetch_calendar_events, format_events_for_ai
+            events = await fetch_calendar_events(
+                url=settings.get("caldav_url", "https://caldav.icloud.com"),
+                username=settings.get("caldav_username", ""),
+                password=settings.get("caldav_password", ""),
+                calendar_filter=settings.get("caldav_calendars", ""),
+                days_ahead=3
+            )
+            calendar_section = f"KALENDER:\n{format_events_for_ai(events)}\n\n"
+        except Exception as e:
+            logger.warning(f"[EVENING] Kalender-henting feilet: {e}")
+
     system = (
         f"Du er en familieassistent som gir daglige oversikter.\n"
         f"Dagens dato er {today_str}. I morgen er det {tomorrow_str}.\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
+        f"{calendar_section}"
         f"Her er meldinger og informasjon fra familie-appen:\n{msg_context}\n\n"
         f"Gi en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter.\n"
         f"Maks 5-6 korte punkter. Ikke ta med forberedelser. Ikke lag oppsummering. Kun kort svar.\n"
