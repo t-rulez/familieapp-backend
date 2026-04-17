@@ -1012,7 +1012,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                  'er', 'var', 'blir', 'ble', 'vil', 'kan', 'skal', 'skulle', 'ville', 'være',
                  'med', 'for', 'til', 'fra', 'på', 'av', 'om', 'og', 'eller', 'men', 'som',
                  'hva', 'når', 'hvor', 'hvem', 'hvilken', 'noe', 'noen'}
-    words = [w.lower().strip('?.,!') for w in req.question.split() if len(w) > 2 and w.lower() not in stopwords]
+    words = [w.lower().strip('?.,!') for w in req.question.split() if len(w) > 1 and w.lower() not in stopwords]
 
     from database import get_pool
     import json as _json
@@ -1021,6 +1021,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     relevant = []
 
     if words:
+        logger.info(f"[AI/CHAT] Søkeord: {words}")
         sql = (
             "SELECT id, source, source_label, category, title, tldr, body,"
             " time_label AS time, timestamp, priority, status, meta"
@@ -1046,6 +1047,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                         except: m["meta"] = {}
                     m["sourceLabel"] = m.pop("source_label", m.get("source", ""))
                     relevant.append(m)
+        logger.info(f"[AI/CHAT] Fant {len(relevant)} relevante meldinger")
 
     def score_msg(m):
         text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
