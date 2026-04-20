@@ -1018,8 +1018,8 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     relevant = []
 
     # Sjekk om spørsmålet handler om tid (begrens da til 14 dager)
-    time_words = {'morgen','dag','uke','uken','dager','imorgen','idag','fredag','mandag',
-                  'tirsdag','onsdag','torsdag','lørdag','søndag','helgen','neste','denne'}
+    time_words = {'morgen','dag','uke','uken','ukens','ukes','dager','imorgen','idag','fredag','mandag',
+                  'tirsdag','onsdag','torsdag','lørdag','søndag','helgen','neste','denne','kommende'}
     is_time_query = any(w in time_words for w in words)
     date_filter = "AND timestamp > NOW() - INTERVAL '14 days'" if is_time_query else ""
     if is_time_query:
