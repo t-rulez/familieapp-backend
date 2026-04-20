@@ -11,6 +11,27 @@ from email.utils import parsedate_to_datetime
 logger = logging.getLogger(__name__)
 
 
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Trekker ut tekst fra PDF-bytes med pypdf."""
+    try:
+        import pypdf, io
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        text = ""
+        for page in reader.pages:
+            text += (page.extract_text() or "") + "\n"
+        # Rens opp spacing-problemer (f.eks. "R e a d y" -> "Ready")
+        words = [w for w in text.split() if w]
+        if words and sum(len(w) for w in words) / len(words) < 2.5:
+            # Tegn er separert med mellomrom – rekonstruer ord
+            import re as _re
+            # Erstatt enkeltbokstav-sekvenser med sammenhengende tekst
+            text = _re.sub(r'(?<=\S) (?=\S)', '', text)
+        return text.strip()
+    except Exception as e:
+        logger.warning(f"[SKOLEMELDING] PDF-ekstraksjon feilet: {e}")
+        return ""
+
+
 def get_email_config() -> list[dict]:
     """
     Henter e-postkonfigurasjon fra miljøvariabler.
@@ -222,6 +243,11 @@ class EmailService:
             if not body:
                 return None
 
+            # Hent PDF-vedlegg og legg til tekst
+            pdf_texts = self._extract_pdf_attachments(msg)
+            if pdf_texts:
+                body += "\n\n--- Vedlegg ---\n" + "\n\n".join(pdf_texts)
+
             # Lag TL;DR (første 150 tegn av body, ryddet opp)
             clean_body = self._clean_text(body)
             tldr = clean_body[:150].strip()
@@ -266,6 +292,38 @@ class EmailService:
             else:
                 decoded.append(part)
         return " ".join(decoded).strip()
+
+    def _extract_pdf_attachments(self, msg) -> list[str]:
+        """Henter PDF-vedlegg fra e-post og returnerer tekst fra dem."""
+        pdf_texts = []
+        if not msg.is_multipart():
+            return pdf_texts
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            disposition = str(part.get("Content-Disposition", ""))
+            filename = part.get_filename() or ""
+            is_pdf = (
+                content_type == "application/pdf" or
+                filename.lower().endswith(".pdf") or
+                "attachment" in disposition and "pdf" in filename.lower()
+            )
+            if not is_pdf:
+                continue
+            try:
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    continue
+                # Begrens til 5 MB
+                if len(payload) > 5 * 1024 * 1024:
+                    logger.warning(f"[SKOLEMELDING] PDF {filename} er for stor ({len(payload)/1024/1024:.1f} MB), hopper over")
+                    continue
+                pdf_text = _extract_pdf_text(payload)
+                if pdf_text and len(pdf_text) > 50:
+                    logger.info(f"[SKOLEMELDING] PDF '{filename}': {len(pdf_text)} tegn ekstrahert")
+                    pdf_texts.append(f"PDF: {filename}\n{pdf_text}")
+            except Exception as e:
+                logger.error(f"[SKOLEMELDING] Feil ved PDF-vedlegg {filename}: {e}")
+        return pdf_texts
 
     def _extract_body(self, msg) -> str:
         """Henter ren tekst fra e-posten (foretrekker plain text over HTML)."""
