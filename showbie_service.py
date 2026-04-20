@@ -436,7 +436,7 @@ class ShowbieService:
             # Legg til instruksjonstekst
             image_contents.append({
                 "type": "text",
-                "text": f"Dette er {len(image_contents)} side(r) fra Showbie-oppgaven '{assignment_name}' (fil: {file_name}). Trekk ut all viktig informasjon fra ALLE sider på norsk: aktiviteter, datoer, ukeplan, lekser, beskjeder. Vær konkret og presis. Maks 600 tegn totalt."
+                "text": f"Dette er {len(image_contents)} side(r) fra Showbie-oppgaven '{assignment_name}' (fil: {file_name}). Trekk ut ALL viktig informasjon fra ALLE sider på norsk: aktiviteter, datoer, ukeplan, lekser, oppgaver, beskjeder. Ta med alt av betydning. Ingen begrensning på lengde."
             })
 
             # Send til Claude Vision
@@ -450,7 +450,7 @@ class ShowbieService:
                     },
                     json={
                         "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 600,
+                        "max_tokens": 2000,
                         "messages": [{"role": "user", "content": image_contents}]
                     }
                 )
