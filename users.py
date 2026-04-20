@@ -51,17 +51,7 @@ async def init_user_tables():
                 email_1_source        TEXT DEFAULT 'skolemelding',
                 email_1_category      TEXT DEFAULT 'skole',
                 email_1_enabled       BOOLEAN DEFAULT FALSE,
-                email_2_host          TEXT,
-                email_2_port          INTEGER DEFAULT 993,
-                email_2_username      TEXT,
-                email_2_password      TEXT,
-                email_2_from_filter   TEXT,
-                email_2_subject_filter TEXT,
-                email_2_delete_after  BOOLEAN DEFAULT FALSE,
-                email_2_source_label  TEXT DEFAULT 'Showbie',
-                email_2_source        TEXT DEFAULT 'showbie',
-                email_2_category      TEXT DEFAULT 'skole',
-                email_2_enabled       BOOLEAN DEFAULT FALSE,
+
                 showbie_token         TEXT,
                 showbie_user_id       TEXT,
                 showbie_token_expires BIGINT,
@@ -218,7 +208,7 @@ async def get_user_settings(user_id: str) -> Optional[dict]:
     s = dict(row)
 
     # Dekrypter sensitive felter for intern bruk
-    for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
+    for field in ["spond_password", "email_1_password", "caldav_password"]:
         if s.get(field):
             try:
                 s[field] = decrypt(s[field])
@@ -233,7 +223,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
     if not settings:
         return None
     # Fjern passord fra responsen
-    for field in ["spond_password", "email_1_password", "email_2_password", "password_hash"]:
+    for field in ["spond_password", "email_1_password", "password_hash"]:
         settings.pop(field, None)
     # Vis om passord er satt (uten å vise selve passordet)
     pool = await get_pool()
@@ -242,7 +232,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
             SELECT
                 spond_password IS NOT NULL AND spond_password != '' AS spond_has_password,
                 email_1_password IS NOT NULL AND email_1_password != '' AS email_1_has_password,
-                email_2_password IS NOT NULL AND email_2_password != '' AS email_2_has_password,
+
                 caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password,
                 showbie_token IS NOT NULL AND showbie_token != '' AS showbie_has_token,
                 showbie_token_expires,
@@ -258,7 +248,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
 async def update_user_settings(user_id: str, updates: dict):
     """Oppdaterer innstillinger – krypterer passord automatisk."""
     # Krypter passord-felter
-    for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
+    for field in ["spond_password", "email_1_password", "caldav_password"]:
         if field in updates and updates[field]:
             updates[field] = encrypt(updates[field])
         elif field in updates and not updates[field]:
