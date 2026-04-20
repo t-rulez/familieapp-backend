@@ -406,23 +406,41 @@ class ShowbieService:
             return None
 
     async def _extract_content_from_preview(self, client, preview_url: str, assignment_name: str, file_name: str) -> str:
-        """Henter preview-bilde og sender til Claude Vision for tolkning."""
+        """Henter preview-bilder (alle sider) og sender til Claude Vision for tolkning."""
         try:
-            import os
+            import os, re as _re
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
             if not api_key:
                 return ""
 
-            # Last ned preview-bilde
-            img_response = await client.get(preview_url)
-            if img_response.status_code != 200:
+            # Hent alle tilgjengelige sider (preview_000, preview_001, ...)
+            image_contents = []
+            base_url = _re.sub(r'preview_\d+\.jpg', 'preview_{:03d}.jpg', preview_url)
+
+            for page_num in range(10):  # Maks 10 sider
+                page_url = base_url.format(page_num)
+                img_response = await client.get(page_url)
+                if img_response.status_code != 200:
+                    break  # Ingen flere sider
+                img_data = base64.b64encode(img_response.content).decode()
+                content_type = img_response.headers.get("content-type", "image/jpeg")
+                image_contents.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": content_type, "data": img_data}
+                })
+                logger.info(f"[SHOWBIE] Hentet side {page_num + 1} av '{file_name}'")
+
+            if not image_contents:
                 return ""
 
-            img_data = base64.b64encode(img_response.content).decode()
-            content_type = img_response.headers.get("content-type", "image/jpeg")
+            # Legg til instruksjonstekst
+            image_contents.append({
+                "type": "text",
+                "text": f"Dette er {len(image_contents)} side(r) fra Showbie-oppgaven '{assignment_name}' (fil: {file_name}). Trekk ut all viktig informasjon fra ALLE sider på norsk: aktiviteter, datoer, ukeplan, lekser, beskjeder. Vær konkret og presis. Maks 600 tegn totalt."
+            })
 
             # Send til Claude Vision
-            async with httpx.AsyncClient(timeout=30) as ai_client:
+            async with httpx.AsyncClient(timeout=60) as ai_client:
                 res = await ai_client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
@@ -432,24 +450,8 @@ class ShowbieService:
                     },
                     json={
                         "model": "claude-sonnet-4-20250514",
-                        "max_tokens": 500,
-                        "messages": [{
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": content_type,
-                                        "data": img_data
-                                    }
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"Dette er et bilde fra Showbie-oppgaven '{assignment_name}' (fil: {file_name}). Trekk ut all viktig informasjon på norsk: aktiviteter, datoer, ukeplan, lekser, beskjeder. Vær konkret og presis. Maks 400 tegn."
-                                }
-                            ]
-                        }]
+                        "max_tokens": 600,
+                        "messages": [{"role": "user", "content": image_contents}]
                     }
                 )
                 if res.status_code == 200:
