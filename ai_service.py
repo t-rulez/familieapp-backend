@@ -164,11 +164,12 @@ Svar med JSON i dette formatet:
 }}
 
 Regler:
-- "high": tydelig relevant basert på brukerens mønster
-- "medium": usikker, vis til brukeren
-- "low": tydelig ikke relevant basert på brukerens mønster  
-- auto_skip: sett true KUN hvis du er meget sikker (low score + klart mønster)
-- Vær konservativ – tvilstilfeller skal alltid vises til brukeren"""
+- "high": tydelig relevant – angår direkte denne familien (barnets navn, spesifikk aktivitet, viktig beskjed)
+- "medium": kan være relevant, men usikkert
+- "low": generell diskusjon, informasjon til mange, ikke spesifikt for denne familien
+- auto_skip: sett true hvis "low" score OG meldingen er generell diskusjon, avstemning, eller masseutsendelse uten spesifikk info
+- Vær STRENG: generelle diskusjoner i foreldregrupper, "hvem kan kjøre?" og lignende koordineringsmeldinger uten svar = low + auto_skip
+- Viktige beskjeder om tid/sted/påmelding = medium eller high selv om de er brede"""
 
         response, tokens_in, tokens_out = await _call_claude(system, user_prompt, max_tokens=200)
 
