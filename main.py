@@ -1017,6 +1017,14 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     seen_ids = set()
     relevant = []
 
+    # Sjekk om spørsmålet handler om tid (begrens da til 14 dager)
+    time_words = {'morgen','dag','uke','uken','dager','imorgen','idag','fredag','mandag',
+                  'tirsdag','onsdag','torsdag','lørdag','søndag','helgen','neste','denne'}
+    is_time_query = any(w in time_words for w in words)
+    date_filter = "AND timestamp > NOW() - INTERVAL '14 days'" if is_time_query else ""
+    if is_time_query:
+        logger.info(f"[AI/CHAT] Tidsspørsmål – begrenser til siste 14 dager")
+
     if words:
         logger.info(f"[AI/CHAT] Søkeord: {words}")
         sql = (
@@ -1024,6 +1032,8 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             " time_label AS time, timestamp, priority, status, meta"
             " FROM messages"
             " WHERE user_id = $1"
+            " AND status != 'skipped'"
+            f" {date_filter}"
             " AND (LOWER(title) LIKE $2"
             " OR LOWER(tldr) LIKE $2"
             " OR LOWER(body) LIKE $2"
@@ -1050,7 +1060,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         text = f"{m['title']} {m['tldr']} {m.get('body','')} {m.get('category','')}".lower()
         return sum(1 for w in words if w in text)
 
-    relevant = sorted(relevant, key=score_msg, reverse=True)[:100]
+    relevant = sorted(relevant, key=score_msg, reverse=True)[:50]
     if not relevant:
         relevant = await get_all_messages(user_id=user["id"], limit=10)
 
@@ -1065,7 +1075,13 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             parts.append(f"Innhold: {body_preview}")
         return "\n".join(parts)
 
-    msg_context = "\n\n".join([format_msg(m) for m in relevant])
+    parts = [format_msg(m) for m in relevant]
+    # Begrens total kontekststørrelse til ~30000 tegn
+    msg_context = ""
+    for part in parts:
+        if len(msg_context) + len(part) > 30000:
+            break
+        msg_context += ("\n\n" if msg_context else "") + part
 
     family_section = f"FAMILIEPROFIL:\n{req.family_context}\n" if req.family_context else ""
     auto_section = f"LAERT KONTEKST:\n{req.auto_context}\n" if req.auto_context else ""
@@ -1113,16 +1129,37 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     ]
     messages.append({"role": "user", "content": req.question})
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 800, "system": system, "messages": messages}
-        )
-        data = res.json()
-
-    answer = data.get("content", [{}])[0].get("text", "Beklager, noe gikk galt.")
-    return {"answer": answer}
+    import asyncio as _asyncio
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                res = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 800, "system": system, "messages": messages}
+                )
+            if res.status_code in (429, 529):
+                wait = [5, 15, 30][attempt]
+                logger.warning(f"[AI/CHAT] API overbelastet ({res.status_code}), venter {wait}s...")
+                await _asyncio.sleep(wait)
+                continue
+            if res.status_code != 200:
+                logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:200]}")
+                return {"answer": f"Beklager, API-feil ({res.status_code}). Prøv igjen."}
+            data = res.json()
+            answer = data.get("content", [{}])[0].get("text", "")
+            if not answer:
+                logger.error(f"[AI/CHAT] Tomt svar: {data}")
+                return {"answer": "Beklager, fikk tomt svar. Prøv igjen."}
+            return {"answer": answer}
+        except httpx.TimeoutException:
+            logger.warning(f"[AI/CHAT] Timeout (forsøk {attempt+1}/3)")
+            if attempt == 2:
+                return {"answer": "Beklager, forespørselen tok for lang tid. Prøv igjen."}
+        except Exception as e:
+            logger.error(f"[AI/CHAT] Feil: {e}")
+            return {"answer": "Beklager, noe gikk galt. Prøv igjen."}
+    return {"answer": "Beklager, noe gikk galt etter 3 forsøk."}
 
 
 @app.post("/ai/learn")
