@@ -380,6 +380,46 @@ class EmailService:
                    .replace("&nbsp;", " ").replace("&quot;", '"').replace("&#39;", "'")
         return self._clean_text(html)
 
+    def _is_showbie_email(self, from_addr: str) -> bool:
+        """Sjekker om e-posten er fra Showbie."""
+        return "showbie" in from_addr.lower() or "no-reply@showbie" in from_addr.lower()
+
+    def _clean_showbie_body(self, text: str) -> str:
+        """Renser Showbie e-postvarsel for støy og boilerplate."""
+        # Fjern alle URL-er
+        text = re.sub(r'https?://\S+', '', text)
+        # Fjern Showbie-boilerplate
+        boilerplate = [
+            r'Email notification sent by Showbie[^\n]*',
+            r'Notification Preferences[^\n]*',
+            r'Reply to [^\n]*Comment[^\n]*',
+            r'\w+ \w+ \w+ \d+,? \d+:\d+[ap]m',  # dato-stempel med navn
+            r'\b\w+ \d+,? \d+:\d+[ap]m',  # dato-stempel uten navn
+            r'Showbie\s*\(\s*\)',
+            r'\(\s*\)',
+        ]
+        for pattern in boilerplate:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
+        # Fjern duplikatlinjer (samme linje forekommer flere ganger)
+        lines = text.splitlines()
+        seen = []
+        unique_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                unique_lines.append(line)
+                continue
+            # Sjekk om linjen allerede er sett (fuzzy - ignorer case og whitespace)
+            normalized = ' '.join(stripped.lower().split())
+            if normalized not in seen and len(normalized) > 3:
+                seen.append(normalized)
+                unique_lines.append(line)
+        text = '\n'.join(unique_lines)
+        # Rens opp whitespace
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r' {2,}', ' ', text)
+        return text.strip()
+
     def _clean_text(self, text: str) -> str:
         """Rydder opp i tekst – fjerner overflødige linjeskift og mellomrom."""
         lines = [line.strip() for line in text.splitlines()]

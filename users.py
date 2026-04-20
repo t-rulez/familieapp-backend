@@ -296,10 +296,7 @@ async def get_all_active_users() -> list[dict]:
                 s.email_1_password, s.email_1_from_filter, s.email_1_subject_filter,
                 s.email_1_delete_after, s.email_1_source_label, s.email_1_source,
                 s.email_1_category, s.email_1_enabled,
-                s.email_2_host, s.email_2_port, s.email_2_username,
-                s.email_2_password, s.email_2_from_filter, s.email_2_subject_filter,
-                s.email_2_delete_after, s.email_2_source_label, s.email_2_source,
-                s.email_2_category, s.email_2_enabled,
+
                 s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
                 s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled, s.showbie_child_ids,
                 s.evening_summary_enabled, s.evening_summary_time
@@ -307,7 +304,6 @@ async def get_all_active_users() -> list[dict]:
             JOIN user_settings s ON u.id = s.user_id
             WHERE s.spond_enabled = TRUE
                OR s.email_1_enabled = TRUE
-               OR s.email_2_enabled = TRUE
                OR s.wa_enabled = TRUE
                OR s.showbie_enabled = TRUE
                OR s.evening_summary_enabled = TRUE
@@ -317,7 +313,7 @@ async def get_all_active_users() -> list[dict]:
     for row in rows:
         u = dict(row)
         # Dekrypter passord
-        for field in ["spond_password", "email_1_password", "email_2_password", "caldav_password"]:
+        for field in ["spond_password", "email_1_password", "caldav_password"]:
             if u.get(field):
                 try:
                     u[field] = decrypt(u[field])

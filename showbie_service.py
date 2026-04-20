@@ -81,23 +81,42 @@ class ShowbieService:
                             continue
 
                         posts = await self._get_folder_posts(client, folder_id)
+                        # Hent brukernavn fra folder-posts response (for kommentarer)
                         for post in posts:
-                            # Sjekk om meldingen allerede finnes (hopp over Claude Vision)
-                            file_name = post.get("fileName", post.get("name", ""))
+                            post_type = post.get("type", "F")
                             created = post.get("createdDateStamp", 0)
-                            post_id = f"showbie-{file_name.replace('.','_')}-{created}"
+
+                            # Bygg ID og sjekk om allerede finnes
+                            if post_type in ("C", "V", "A"):  # Comment/Voice/Annotation
+                                post_id = f"showbie-comment-{post.get('id', created)}-{created}"
+                            else:
+                                file_name = post.get("fileName", post.get("name", ""))
+                                post_id = f"showbie-{file_name.replace('.','_')}-{created}"
 
                             if post_id in existing_ids:
-                                # Allerede i DB – hopp over
                                 continue
 
-                            msg = await self._normalize_post(
-                                client, post, aname, assignment["_group_name"], folder_name, due
-                            )
+                            if post_type in ("C", "V", "A"):
+                                # Tekstkommentar – hent avsendernavn
+                                sender = post.get("authorName") or post.get("author", {}).get("displayName", "") if isinstance(post.get("author"), dict) else ""
+                                msg = await self._normalize_comment(
+                                    post, aname, assignment["_group_name"], folder_name, sender
+                                )
+                            else:
+                                # Fil/PDF/bilde
+                                msg = await self._normalize_post(
+                                    client, post, aname, assignment["_group_name"], folder_name, due
+                                )
+
                             if msg:
                                 if user_id:
                                     msg["user_id"] = user_id
                                 results.append(msg)
+                                if upsert_fn:
+                                    try:
+                                        await upsert_fn([msg])
+                                    except Exception as e:
+                                        logger.error(f"[SHOWBIE] Lagring feilet: {e}")
                                 # Lagre fortløpende
                                 if upsert_fn:
                                     try:
@@ -239,6 +258,93 @@ class ShowbieService:
         except Exception as e:
             logger.error(f"[SHOWBIE]  folder-posts feilet: {e}")
         return []
+
+    def _clean_comment_text(self, text: str) -> str:
+        """Renser Showbie-kommentartekst for støy og boilerplate."""
+        import re as _re
+        # Fjern URL-er
+        text = _re.sub(r'https?://\S+', '', text)
+        # Fjern Showbie boilerplate
+        boilerplate = [
+            r'Email notification sent by Showbie[^\n]*',
+            r'Notification Preferences[^\n]*',
+            r'Reply to [^\n]*Comment[^\n]*',
+            r'\w+ \w+ \w+ \d+,? \d+:\d+[ap]m',
+            r'\b\w+ \d+,? \d+:\d+[ap]m',
+            r'Showbie\s*\(\s*\)',
+            r'\(\s*\)',
+        ]
+        for pattern in boilerplate:
+            text = _re.sub(pattern, '', text, flags=_re.IGNORECASE)
+        # Fjern duplikatlinjer
+        seen = []
+        unique_lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            normalized = ' '.join(stripped.lower().split())
+            if normalized not in seen and len(normalized) > 3:
+                seen.append(normalized)
+                unique_lines.append(stripped)
+        text = '\n'.join(unique_lines)
+        return _re.sub(r'\n{3,}', '\n\n', text).strip()
+
+    async def _normalize_comment(
+        self, post: dict, assignment_name: str,
+        group_name: str, folder_name: str, sender_name: str
+    ) -> Optional[dict]:
+        """Normaliserer en tekstkommentar fra Showbie."""
+        try:
+            created = post.get("createdDateStamp", 0)
+            post_id = f"showbie-comment-{post.get('id', created)}-{created}"
+            timestamp = datetime.fromtimestamp(created / 1000, tz=timezone.utc) if created else datetime.now(timezone.utc)
+            time_str = timestamp.strftime("%-d. %b %H:%M")
+
+            # Hent kommentartekst – kan ligge i ulike felt
+            raw_text = (
+                post.get("body") or
+                post.get("text") or
+                post.get("content") or
+                post.get("comment") or ""
+            )
+            if not raw_text or len(raw_text.strip()) < 5:
+                return None
+
+            clean = self._clean_comment_text(raw_text)
+            if not clean:
+                return None
+
+            title = f"{assignment_name}: {sender_name}" if sender_name else assignment_name
+            tldr = clean[:120] + ("..." if len(clean) > 120 else "")
+
+            body = f"Fra: {sender_name}\nOppgave: {assignment_name}\nKlasse: {group_name}"
+            if folder_name:
+                body += f"\nMappe: {folder_name}"
+            body += f"\n\n{clean}"
+
+            return {
+                "id": post_id,
+                "source": "showbie",
+                "sourceLabel": "Showbie",
+                "category": group_name,
+                "title": title,
+                "tldr": tldr,
+                "body": body,
+                "time": time_str,
+                "timestamp": timestamp.isoformat(),
+                "priority": "medium",
+                "status": "unread",
+                "meta": {
+                    "assignment": assignment_name,
+                    "folder": folder_name,
+                    "group": group_name,
+                    "sender": sender_name,
+                }
+            }
+        except Exception as e:
+            logger.error(f"[SHOWBIE] Kommentar normalisering feilet: {e}")
+            return None
 
     async def _normalize_post(
         self, client, post: dict, assignment_name: str,
