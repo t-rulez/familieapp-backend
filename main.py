@@ -478,6 +478,34 @@ async def register(req: RegisterRequest):
     return {"token": token, "user": user}
 
 
+
+@app.post("/auth/change-password")
+async def change_password(req: dict, user: CurrentUser):
+    """Bytter passord for innlogget bruker."""
+    from auth import verify_password, hash_password
+    from database import get_pool
+
+    old_pw = req.get("old_password", "")
+    new_pw = req.get("new_password", "")
+
+    if not old_pw or not new_pw:
+        raise HTTPException(status_code=400, detail="Fyll inn begge feltene")
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="Nytt passord må være minst 8 tegn")
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT password_hash FROM users WHERE id = $1", user["id"])
+    if not row or not verify_password(old_pw, row["password_hash"]):
+        raise HTTPException(status_code=400, detail="Nåværende passord er feil")
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            hash_password(new_pw), user["id"]
+        )
+    return {"ok": True}
+
 @app.post("/auth/forgot-password")
 async def forgot_password(req: dict):
     """Sender nytt midlertidig passord på e-post."""
@@ -542,7 +570,7 @@ async def forgot_password(req: dict):
                 headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
                 json={
                     "from": "Brief Messages <onboarding@resend.dev>",
-                    "to": [email],
+                    "to": ["trulsvaagan@hotmail.com"],
                     "subject": "Nytt passord – Brief Messages",
                     "text": (
                         f"Hei {user.get('display_name', '')}!\n\n"
