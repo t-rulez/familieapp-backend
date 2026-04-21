@@ -10,10 +10,10 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-20250514"
 
 
-async def _call_claude(system: str, user: str, max_tokens: int = 500) -> str:
+async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_key: str = None) -> str:
     """Kaller Claude API med automatisk retry ved overbelastning (529) eller rate limit (429)."""
     import asyncio
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = user_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY er ikke satt")
 
@@ -171,7 +171,7 @@ Regler:
 - Vær STRENG: generelle diskusjoner i foreldregrupper, "hvem kan kjøre?" og lignende koordineringsmeldinger uten svar = low + auto_skip
 - Viktige beskjeder om tid/sted/påmelding = medium eller high selv om de er brede"""
 
-        response, tokens_in, tokens_out = await _call_claude(system, user_prompt, max_tokens=200)
+        response, tokens_in, tokens_out = await _call_claude(system, user_prompt, max_tokens=200, user_api_key=user_api_key)
 
         # Parse JSON-svar
         # Finn JSON-blokken i svaret

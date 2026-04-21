@@ -126,7 +126,7 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             from showbie_service import ShowbieService
             from database import get_pool
             child_ids = [c.strip() for c in (user.get("showbie_child_ids") or "").split(",") if c.strip()]
-            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids)
+            svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids, user_api_key=_get_api_key(user))
             # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering
             pool = await get_pool()
             async with pool.acquire() as conn:
@@ -343,6 +343,7 @@ async def send_evening_summary(user: dict):
     settings = await get_user_settings(uid)
     family_ctx = settings.get("family_context", "") if settings else ""
     auto_ctx = settings.get("ai_learned_context", "") if settings else ""
+    user_api_key = _get_api_key(settings) if settings else os.environ.get("ANTHROPIC_API_KEY", "")
 
     # Hent kalenderdata – samme som AI-assistenten
     calendar_section = ""
@@ -372,7 +373,7 @@ async def send_evening_summary(user: dict):
         f"Svar pa norsk."
     )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = user_api_key
     if not api_key:
         return
 
@@ -515,11 +516,11 @@ async def update_settings(updates: dict, user: CurrentUser):
         "email_1_from_filter", "email_1_subject_filter", "email_1_delete_after",
         "email_1_source_label", "email_1_source", "email_1_category", "email_1_enabled",
 
-        "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
+        "wa_service_url", "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
         "evening_summary_enabled", "evening_summary_time",
-        "family_context", "ai_learned_context"
+        "family_context", "ai_learned_context", "claude_api_key"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
     await update_user_settings(user["id"], filtered)
@@ -657,12 +658,22 @@ async def ingest_messages(
 
 # ─── WhatsApp proxy ──────────────────────────────────────────────────────────
 
+def _get_wa_url(settings: dict) -> str:
+    """Henter WhatsApp-URL fra brukerinnstillinger, med fallback til miljøvariabel."""
+    return settings.get("wa_service_url") or os.environ.get("WHATSAPP_SERVICE_URL", "")
+
+def _get_api_key(settings: dict) -> str:
+    """Henter Claude API-nøkkel fra brukerinnstillinger, med fallback til miljøvariabel."""
+    return settings.get("claude_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
+
 @app.get("/whatsapp/status")
-async def wa_status(user: CurrentUser):
-    """Proxy til WhatsApp-tjenesten – unngår CORS."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+async def whatsapp_status(user: CurrentUser):
+    """Proxy til WhatsApp-tjenesten for å unngå CORS."""
+    from users import get_user_settings
+    settings = await get_user_settings(user["id"])
+    wa_url = _get_wa_url(settings)
     if not wa_url:
-        return {"ready": False, "hasQr": False, "error": "WHATSAPP_SERVICE_URL ikke satt"}
+        return {"ready": False, "hasQr": False, "error": "WhatsApp-tjeneste ikke konfigurert"}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.get(f"{wa_url}/")
@@ -671,39 +682,13 @@ async def wa_status(user: CurrentUser):
         return {"ready": False, "hasQr": False, "error": str(e)}
 
 @app.get("/whatsapp/qr")
-async def wa_qr(user: CurrentUser):
-    """Proxy QR-HTML fra WhatsApp-tjenesten."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
-    if not wa_url:
-        raise HTTPException(status_code=503, detail="WHATSAPP_SERVICE_URL ikke satt")
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{wa_url}/qr")
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(content=res.text)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-# ─── WhatsApp proxy ──────────────────────────────────────────────────────────
-
-@app.get("/whatsapp/status")
-async def whatsapp_status(user: CurrentUser):
-    """Proxy til WhatsApp-tjenesten for å unngå CORS."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
-    if not wa_url:
-        raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
-    import httpx
-    async with httpx.AsyncClient(timeout=10) as client:
-        res = await client.get(f"{wa_url}/")
-        return res.json()
-
-@app.get("/whatsapp/qr")
 async def whatsapp_qr(user: CurrentUser):
     """Proxy QR-kode fra WhatsApp-tjenesten."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    from users import get_user_settings
+    settings = await get_user_settings(user["id"])
+    wa_url = _get_wa_url(settings)
     if not wa_url:
         raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
-    import httpx
     async with httpx.AsyncClient(timeout=10) as client:
         res = await client.get(f"{wa_url}/qr")
         return {"html": res.text}
@@ -711,10 +696,11 @@ async def whatsapp_qr(user: CurrentUser):
 @app.post("/whatsapp/logout")
 async def whatsapp_logout(user: CurrentUser):
     """Logger ut av WhatsApp og sletter sesjonen."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    from users import get_user_settings
+    settings = await get_user_settings(user["id"])
+    wa_url = _get_wa_url(settings)
     if not wa_url:
         raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
-    import httpx
     async with httpx.AsyncClient(timeout=10) as client:
         res = await client.post(f"{wa_url}/logout")
         return res.json()
@@ -735,10 +721,11 @@ async def fix_null_users(user: CurrentUser):
 @app.post("/whatsapp/fetch-history")
 async def whatsapp_fetch_history(user: CurrentUser):
     """Trigger historisk henting fra WhatsApp-tjenesten."""
-    wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+    from users import get_user_settings
+    settings = await get_user_settings(user["id"])
+    wa_url = _get_wa_url(settings)
     if not wa_url:
         raise HTTPException(status_code=503, detail="WhatsApp-tjeneste ikke konfigurert")
-    import httpx
     async with httpx.AsyncClient(timeout=300) as client:
         res = await client.post(f"{wa_url}/fetch-history")
         return res.json()
@@ -811,7 +798,7 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
 
     # ── WhatsApp ───────────────────────────────────────────────────────────────
     if settings.get("wa_enabled"):
-        wa_url = os.environ.get("WHATSAPP_SERVICE_URL", "")
+        wa_url = _get_wa_url(settings)
         if wa_url:
             try:
                 import httpx
@@ -1000,9 +987,11 @@ class AiChatRequest(BaseModel):
 @app.post("/ai/chat")
 async def ai_chat(req: AiChatRequest, user: CurrentUser):
     import httpx
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    from users import get_user_settings
+    settings = await get_user_settings(user["id"])
+    api_key = _get_api_key(settings)
     if not api_key:
-        raise HTTPException(status_code=503, detail="AI ikke konfigurert")
+        return {"answer": "Claude API-nøkkel er ikke konfigurert. Legg inn din API-nøkkel i Innstillinger → Annet."}
 
     # Fjern kun veldig korte ord og vanlige stopwords
     stopwords = {'jeg', 'deg', 'han', 'hun', 'den', 'det', 'de', 'vi', 'dere', 'ikke', 'har',
@@ -1165,7 +1154,8 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 @app.post("/ai/learn")
 async def ai_learn(req: dict, user: CurrentUser):
     import httpx
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    settings = await get_user_settings(user["id"])
+    api_key = _get_api_key(settings)
     if not api_key:
         return {"learned": ""}
 

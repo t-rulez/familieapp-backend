@@ -23,11 +23,12 @@ MONTHS_NO = ["januar","februar","mars","april","mai","juni","juli","august","sep
 
 
 class ShowbieService:
-    def __init__(self, token: str, user_id: str, fingerprint: str = "", child_ids: list = None):
+    def __init__(self, token: str, user_id: str, fingerprint: str = "", child_ids: list = None, user_api_key: str = None):
         self.token = token
         self.user_id = user_id
         self.fingerprint = fingerprint or "brief-default-fp"
         self.child_ids = child_ids or []
+        self.user_api_key = user_api_key or ""
         self.base_url = "https://eu.showbie.com/core/v5"
         self._token_b64 = base64.b64encode(token.encode()).decode()
 
@@ -409,7 +410,7 @@ class ShowbieService:
         """Henter preview-bilder (alle sider) og sender til Claude Vision for tolkning."""
         try:
             import os, re as _re
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            api_key = self.user_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
             if not api_key:
                 return ""
 

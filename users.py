@@ -57,6 +57,7 @@ async def init_user_tables():
                 showbie_token_expires BIGINT,
                 showbie_enabled       BOOLEAN DEFAULT FALSE,
                 showbie_fingerprint    TEXT,
+                wa_service_url        TEXT DEFAULT '',
                 wa_group_filter       TEXT,
                 wa_category           TEXT DEFAULT 'foreldre',
                 wa_source_label       TEXT DEFAULT 'WhatsApp',
@@ -64,6 +65,7 @@ async def init_user_tables():
                 family_context        TEXT DEFAULT '',
                 ai_learned_context    TEXT DEFAULT '',
                 ai_chat_history       TEXT DEFAULT '[]',
+                claude_api_key        TEXT,
                 updated_at            TIMESTAMPTZ DEFAULT NOW()
             )
         """)
@@ -223,7 +225,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
     if not settings:
         return None
     # Fjern passord fra responsen
-    for field in ["spond_password", "email_1_password", "password_hash"]:
+    for field in ["spond_password", "email_1_password", "password_hash", "claude_api_key"]:
         settings.pop(field, None)
     # Vis om passord er satt (uten å vise selve passordet)
     pool = await get_pool()
@@ -234,6 +236,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
                 email_1_password IS NOT NULL AND email_1_password != '' AS email_1_has_password,
 
                 caldav_password IS NOT NULL AND caldav_password != '' AS caldav_has_password,
+                claude_api_key IS NOT NULL AND claude_api_key != '' AS claude_api_key_set,
                 showbie_token IS NOT NULL AND showbie_token != '' AS showbie_has_token,
                 showbie_token_expires,
                 showbie_user_id,
@@ -248,7 +251,7 @@ async def get_user_settings_safe(user_id: str) -> Optional[dict]:
 async def update_user_settings(user_id: str, updates: dict):
     """Oppdaterer innstillinger – krypterer passord automatisk."""
     # Krypter passord-felter
-    for field in ["spond_password", "email_1_password", "caldav_password"]:
+    for field in ["spond_password", "email_1_password", "caldav_password", "claude_api_key"]:
         if field in updates and updates[field]:
             updates[field] = encrypt(updates[field])
         elif field in updates and not updates[field]:
@@ -287,9 +290,10 @@ async def get_all_active_users() -> list[dict]:
                 s.email_1_delete_after, s.email_1_source_label, s.email_1_source,
                 s.email_1_category, s.email_1_enabled,
 
-                s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
+                s.wa_service_url, s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
                 s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled, s.showbie_child_ids,
-                s.evening_summary_enabled, s.evening_summary_time
+                s.evening_summary_enabled, s.evening_summary_time,
+                s.claude_api_key
             FROM users u
             JOIN user_settings s ON u.id = s.user_id
             WHERE s.spond_enabled = TRUE
@@ -303,7 +307,7 @@ async def get_all_active_users() -> list[dict]:
     for row in rows:
         u = dict(row)
         # Dekrypter passord
-        for field in ["spond_password", "email_1_password", "caldav_password"]:
+        for field in ["spond_password", "email_1_password", "caldav_password", "claude_api_key"]:
             if u.get(field):
                 try:
                     u[field] = decrypt(u[field])
