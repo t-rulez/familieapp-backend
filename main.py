@@ -477,6 +477,71 @@ async def register(req: RegisterRequest):
     token = create_token(user["id"], user["email"])
     return {"token": token, "user": user}
 
+
+@app.post("/auth/forgot-password")
+async def forgot_password(req: dict):
+    """Sender nytt midlertidig passord på e-post."""
+    import smtplib, secrets, string
+    from email.mime.text import MIMEText
+    from users import get_user_by_email, get_user_settings
+    from auth import hash_password
+    from database import get_pool
+
+    email = (req.get("email") or "").strip().lower()
+    if not email:
+        return {"ok": False, "error": "E-post mangler"}
+
+    # Finn bruker
+    user = await get_user_by_email(email)
+    if not user:
+        # Ikke avslør om brukeren finnes
+        return {"ok": True}
+
+    # Hent e-post-innstillinger for SMTP
+    settings = await get_user_settings(user["id"])
+    smtp_user = settings.get("email_1_username", "") if settings else ""
+    smtp_pass = settings.get("email_1_password", "") if settings else ""
+
+    if not smtp_user or not smtp_pass:
+        logger.error("[AUTH] Mangler email_1 innstillinger for SMTP")
+        return {"ok": False, "error": "E-post ikke konfigurert"}
+
+    # Generer nytt midlertidig passord
+    alphabet = string.ascii_letters + string.digits
+    new_password = "".join(secrets.choice(alphabet) for _ in range(12))
+
+    # Oppdater passord i DB
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2",
+            hash_password(new_password), user["id"]
+        )
+
+    # Send e-post
+    try:
+        msg = MIMEText(
+            f"Hei {user.get('display_name', '')}!\n\n"
+            f"Ditt nye midlertidige passord er:\n\n"
+            f"  {new_password}\n\n"
+            f"Logg inn og bytt passord i innstillingene.\n\n"
+            f"Brief Messages",
+            "plain", "utf-8"
+        )
+        msg["Subject"] = "Nytt passord – Brief Messages"
+        msg["From"] = smtp_user
+        msg["To"] = email
+
+        with smtplib.SMTP_SSL("send.one.com", 465) as server:
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, [email], msg.as_string())
+
+        logger.info(f"[AUTH] Nytt passord sendt til {email}")
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"[AUTH] SMTP-feil: {e}")
+        return {"ok": False, "error": "Kunne ikke sende e-post. Prøv igjen."}
+
 @app.post("/auth/login")
 async def login(req: LoginRequest):
     user = await get_user_by_email(req.email)
