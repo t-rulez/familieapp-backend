@@ -1102,9 +1102,12 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger og kalender.\n"
         f"Dagens dato er {today_str}. Bruk denne datoen når du svarer på spørsmål om tid.\n"
         "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
-        "FORMATERING: Bruk alltid seksjoner med ### og emoji for oversikter, f.eks:\n"
-        "### 🏫 SKOLE:\n### ⚽ FOTBALL:\n### 👤 VOKSNE:\n### 🎯 AKTIVITETER:\n"
-        "Bruk - for punktlister. Korte svar trenger ikke seksjoner.\n\n"
+        "FORMATERING (følg alltid dette, uansett lengde på svar):\n"
+        "- Ved oversikter og dagsoversikter: del alltid opp i seksjoner med ### og emoji\n"
+        "- Eksempel: ### 🏫 SKOLE:, ### ⚽ FOTBALL:, ### 👤 VOKSNE:, ### 🎯 AKTIVITETER:\n"
+        "- Bruk alltid - for punktlister under hver seksjon\n"
+        "- Selv ved korte svar: bruk seksjoner hvis det er flere kategorier\n"
+        "- IKKE skriv lange løpende setninger – bruk alltid punktlister\n\n"
         + family_section
         + auto_section
         + calendar_section
