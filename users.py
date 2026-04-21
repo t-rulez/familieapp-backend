@@ -210,7 +210,7 @@ async def get_user_settings(user_id: str) -> Optional[dict]:
     s = dict(row)
 
     # Dekrypter sensitive felter for intern bruk
-    for field in ["spond_password", "email_1_password", "caldav_password"]:
+    for field in ["spond_password", "email_1_password", "caldav_password", "claude_api_key"]:
         if s.get(field):
             try:
                 s[field] = decrypt(s[field])
