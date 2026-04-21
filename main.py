@@ -1125,7 +1125,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 800, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 1200, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
