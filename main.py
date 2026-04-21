@@ -481,7 +481,7 @@ async def register(req: RegisterRequest):
 @app.post("/auth/forgot-password")
 async def forgot_password(req: dict):
     """Sender nytt midlertidig passord på e-post."""
-    import smtplib, secrets, string
+    import secrets, string
     from email.mime.text import MIMEText
     from users import get_user_by_email, get_user_settings
     from auth import hash_password
@@ -532,9 +532,29 @@ async def forgot_password(req: dict):
         msg["From"] = smtp_user
         msg["To"] = email
 
-        with smtplib.SMTP_SSL("send.one.com", 465) as server:
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, [email], msg.as_string())
+        resend_key = os.environ.get("RESEND_API_KEY", "")
+        if not resend_key:
+            raise Exception("RESEND_API_KEY er ikke satt")
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=10) as _client:
+            _res = await _client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                json={
+                    "from": "Brief Messages <onboarding@resend.dev>",
+                    "to": [email],
+                    "subject": "Nytt passord – Brief Messages",
+                    "text": (
+                        f"Hei {user.get('display_name', '')}!\n\n"
+                        f"Ditt nye midlertidige passord er:\n\n"
+                        f"  {new_password}\n\n"
+                        f"Logg inn og bytt passord i innstillingene.\n\n"
+                        f"Brief Messages"
+                    )
+                }
+            )
+        if _res.status_code not in (200, 201):
+            raise Exception(f"Resend feil: {_res.text}")
 
         logger.info(f"[AUTH] Nytt passord sendt til {email}")
         return {"ok": True}
