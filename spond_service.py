@@ -30,6 +30,20 @@ class SpondService:
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
             try:
+                # Bygg kart over gruppe-IDer til gruppenavn
+                group_map = {}
+                try:
+                    groups = await s.get_groups()
+                    if groups:
+                        for g in groups:
+                            gid = g.get("id", "")
+                            gname = g.get("name", "")
+                            if gid and gname:
+                                group_map[gid.upper()] = gname
+                    logger.info(f"[SPOND] {len(group_map)} grupper lastet")
+                except Exception as ge:
+                    logger.warning(f"[SPOND] Kunne ikke hente grupper: {ge}")
+
                 chats = await s.get_messages()
                 t1 = _time.time()
                 logger.info(f"[SPOND] get_messages: {t1-t0:.1f}s")
@@ -47,9 +61,13 @@ class SpondService:
                             participants = chat.get("participants", [])
                             if len(participants) <= 2:
                                 continue  # 1:1 chat
+                        community_id = (chat.get("community") or {}).get("id", "").upper()
+                        group_id = (chat.get("groupId") or "").upper()
                         chat_name = (
                             chat.get("name") or
-                            chat.get("community", {}).get("name", "") or
+                            group_map.get(community_id) or
+                            group_map.get(group_id) or
+                            (chat.get("community") or {}).get("name", "") or
                             ""
                         )
                         if not chat_id or chat_id in seen_chat_ids:
