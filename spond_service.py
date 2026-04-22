@@ -44,9 +44,18 @@ class SpondService:
                 except Exception as ge:
                     logger.warning(f"[SPOND] Kunne ikke hente grupper: {ge}")
 
-                chats = await s.get_messages(max_chats=250)
+                raw_chats = await s.get_messages(max_chats=250)
                 t1 = _time.time()
                 logger.info(f"[SPOND] get_messages: {t1-t0:.1f}s")
+                # API kan returnere liste eller dict med chats-nøkkel
+                if isinstance(raw_chats, dict):
+                    chats = raw_chats.get("chats") or raw_chats.get("messages") or []
+                elif isinstance(raw_chats, list):
+                    chats = raw_chats
+                else:
+                    chats = []
+                # Filtrer bort strenger og andre ikke-dict elementer
+                chats = [c for c in chats if isinstance(c, dict)]
                 if chats:
                     logger.info(f"[SPOND] Fant {len(chats)} chatter")
                     seen_chat_ids = set()
