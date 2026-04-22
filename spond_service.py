@@ -38,10 +38,24 @@ class SpondService:
                     seen_chat_ids = set()
                     for chat in chats:
                         chat_id = chat.get("id", "")
-                        chat_name = chat.get("name", "") or ""
+                        chat_type = chat.get("type", "")
+                        # Hopp over 1:1 direktemeldinger
+                        if chat_type in ("DIRECT", "direct"):
+                            continue
+                        # Hopp over chatter uten groupId (private chatter)
+                        if not chat.get("groupId") and chat_type not in ("GROUP", "group", "COMMUNITY", "community"):
+                            participants = chat.get("participants", [])
+                            if len(participants) <= 2:
+                                continue  # 1:1 chat
+                        chat_name = (
+                            chat.get("name") or
+                            chat.get("community", {}).get("name", "") or
+                            ""
+                        )
                         if not chat_id or chat_id in seen_chat_ids:
                             continue
                         seen_chat_ids.add(chat_id)
+                        logger.debug(f"[SPOND] Behandler chat '{chat_name}' type={chat_type} groupId={bool(chat.get('groupId'))}")
                         # Hent meldinger per chat via direkte API-kall
                         try:
                             url = f"{s._chat_url}/chats/{chat_id}/messages/?max=50"
