@@ -684,6 +684,42 @@ async def _maybe_update_profile(user_id: str):
 class SyncRequest(BaseModel):
     since: Optional[str] = None  # ISO timestamp
 
+
+@app.post("/admin/process-all")
+async def process_all_messages(user: CurrentUser):
+    """Kjører AI-scoring på alle ubehandlede meldinger i bakgrunnen."""
+    asyncio.create_task(_process_all_loop(user["id"]))
+    return {"ok": True, "message": "AI-scoring startet i bakgrunnen"}
+
+async def _process_all_loop(user_id: str):
+    """Kjører AI-scoring i loop til alle meldinger er behandlet."""
+    total = 0
+    from users import get_user_settings
+    settings = await get_user_settings(user_id)
+    api_key = _get_api_key(settings)
+    if not api_key:
+        logger.warning("[AI] Ingen API-nøkkel – avbryter process-all")
+        return
+    while True:
+        unprocessed = await get_unprocessed_messages(limit=20, user_id=user_id)
+        if not unprocessed:
+            logger.info(f"[AI] process-all ferdig – {total} meldinger behandlet")
+            break
+        read_examples, skipped_examples = await get_classified_messages(user_id=user_id)
+        user_profile = await get_user_profile(user_id=user_id)
+        for msg in unprocessed:
+            try:
+                tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
+                relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id, user_api_key=api_key)
+                await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
+                total += 1
+                logger.info(f"[AI/PROCESS-ALL] [{relevance['score']}] {msg['title'][:50]}")
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.error(f"[AI/PROCESS-ALL] Feil: {e}")
+                await asyncio.sleep(1)
+        await asyncio.sleep(1)
+
 @app.post("/sync")
 async def trigger_sync(user: CurrentUser, req: SyncRequest = SyncRequest()):
     try:
