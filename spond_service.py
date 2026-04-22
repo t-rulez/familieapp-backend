@@ -25,7 +25,7 @@ class SpondService:
             
             results = []
             now = datetime.now(timezone.utc)
-            history_from = since if since else datetime(2026, 1, 1, tzinfo=timezone.utc)
+            history_from = since if since else datetime(2025, 1, 1, tzinfo=timezone.utc)
             logger.info(f"[SPOND] Synk siden: {history_from.strftime('%Y-%m-%d %H:%M') if since else 'alt'}")
 
             # ── Hent gruppe-meldinger ─────────────────────────────────────────
@@ -113,20 +113,60 @@ class SpondService:
                                         try:
                                             ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                                             if ts < history_from:
+                                                logger.debug(f"[SPOND] Hopper over gammel melding: {ts_str[:10]}")
                                                 continue
                                         except Exception:
                                             pass
+                                    if chat_name in ("G2015-årgangen", "G2017-årgangen", "Klubbdommere"):
+                                        logger.info(f"[SPOND] Prosesserer msg keys={list(msg.keys())[:8]}, type={msg.get('type')}, ts={ts_str[:10]}")
                                     normalized = self._normalize_message(msg, chat)
                                     if normalized:
                                         results.append(normalized)
+                                        logger.info(f"[SPOND] Lagret: '{normalized['title'][:50]}'")
                                     else:
-                                        logger.warning(f"[SPOND] Melding ignorert (type={msg.get('type')}, text='{msg.get('text','')[:30]}')")
+                                        logger.warning(f"[SPOND] Melding ignorert (type={msg.get('type')}, ts={msg.get('timestamp','')[:10]}, text='{msg.get('text','')[:30]}')")
                         except Exception as e:
                             logger.warning(f"[SPOND] Feil fra chat '{chat_name}': {e}")
                 else:
                     logger.info("[SPOND] Ingen chatter funnet")
             except Exception as e:
                 logger.error(f"[SPOND] Meldinger feilet: {e}")
+
+            # ── Hent gruppe-innlegg ───────────────────────────────────────────
+            try:
+                groups = await s.get_groups()
+                if groups:
+                    for group in groups:
+                        gid = group.get("id", "")
+                        gname = group.get("name", "")
+                        if not gid:
+                            continue
+                        try:
+                            url = f"{s.api_url}groups/{gid}/posts/"
+                            async with s.clientsession.get(url, headers=s.auth_headers) as r:
+                                if r.status != 200:
+                                    continue
+                                posts = await r.json()
+                            if not isinstance(posts, list):
+                                posts = posts.get("posts", []) if isinstance(posts, dict) else []
+                            for post in posts:
+                                if not isinstance(post, dict):
+                                    continue
+                                ts_str = post.get("timestamp") or post.get("createdTime", "")
+                                if ts_str:
+                                    try:
+                                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                        if ts < history_from:
+                                            continue
+                                    except Exception:
+                                        pass
+                                normalized = self._normalize_group_post(post, gname, gid)
+                                if normalized:
+                                    results.append(normalized)
+                        except Exception as e:
+                            logger.debug(f"[SPOND] Gruppe-innlegg for '{gname}' feilet: {e}")
+            except Exception as e:
+                logger.error(f"[SPOND] Gruppe-innlegg feilet: {e}")
 
             # ── Hent arrangementer (historisk + fremtid) ──────────────────────
             try:
@@ -152,6 +192,54 @@ class SpondService:
         # Sorter nyeste først
         results.sort(key=lambda x: x["timestamp"], reverse=True)
         return results
+
+    def _normalize_group_post(self, post: dict, group_name: str, group_id: str) -> dict | None:
+        """Normaliserer et gruppe-innlegg fra Spond."""
+        try:
+            import re
+            text = post.get("text") or post.get("body") or post.get("content") or ""
+            if isinstance(text, str):
+                text = re.sub(r'<[^>]+>', ' ', text).strip()
+                text = re.sub(r'\s+', ' ', text).strip()
+            if not text:
+                return None
+
+            post_id = post.get("id") or post.get("identifier") or ""
+            if not post_id:
+                return None
+
+            ts_str = post.get("timestamp") or post.get("createdTime", "")
+            timestamp = self._parse_timestamp(ts_str)
+
+            author = post.get("author") or post.get("owner") or {}
+            if isinstance(author, dict):
+                sender = f"{author.get('firstName', '')} {author.get('lastName', '')}".strip()
+            else:
+                sender = str(author)
+
+            title = f"{group_name}: {text[:60]}" if group_name else text[:80]
+
+            return {
+                "id": f"spond-post-{post_id}",
+                "source": "spond",
+                "sourceLabel": "Spond",
+                "category": group_name or "Spond",
+                "title": title,
+                "tldr": text[:120] + ("..." if len(text) > 120 else ""),
+                "body": text,
+                "time": self._format_relative_time(timestamp),
+                "timestamp": timestamp.isoformat(),
+                "priority": "medium",
+                "status": "unread",
+                "meta": {
+                    "group": group_name,
+                    "sender": sender,
+                    "group_id": group_id,
+                }
+            }
+        except Exception as e:
+            logger.error(f"[SPOND] Gruppe-innlegg normalisering feilet: {e}")
+            return None
 
     def _normalize_message(self, msg: dict, chat: dict) -> dict | None:
         """Gjør en rå Spond-melding om til vårt interne format."""
