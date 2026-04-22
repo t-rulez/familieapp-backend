@@ -144,11 +144,16 @@ class SpondService:
                         try:
                             url = f"{s.api_url}groups/{gid}/posts/"
                             async with s.clientsession.get(url, headers=s.auth_headers) as r:
-                                if r.status != 200:
-                                    continue
-                                posts = await r.json()
-                            if not isinstance(posts, list):
-                                posts = posts.get("posts", []) if isinstance(posts, dict) else []
+                                status = r.status
+                                posts_raw = await r.json()
+                            logger.info(f"[SPOND] Gruppe-innlegg '{gname}': status={status}, type={type(posts_raw).__name__}, keys={list(posts_raw.keys()) if isinstance(posts_raw, dict) else 'list'}")
+                            if status != 200:
+                                continue
+                            if not isinstance(posts_raw, list):
+                                posts = posts_raw.get("posts", []) if isinstance(posts_raw, dict) else []
+                            else:
+                                posts = posts_raw
+                            logger.info(f"[SPOND] Gruppe-innlegg '{gname}': {len(posts)} innlegg")
                             for post in posts:
                                 if not isinstance(post, dict):
                                     continue
@@ -163,8 +168,9 @@ class SpondService:
                                 normalized = self._normalize_group_post(post, gname, gid)
                                 if normalized:
                                     results.append(normalized)
+                                    logger.info(f"[SPOND] Gruppe-innlegg lagret: '{normalized['title'][:50]}'")
                         except Exception as e:
-                            logger.debug(f"[SPOND] Gruppe-innlegg for '{gname}' feilet: {e}")
+                            logger.warning(f"[SPOND] Gruppe-innlegg for '{gname}' feilet: {e}")
             except Exception as e:
                 logger.error(f"[SPOND] Gruppe-innlegg feilet: {e}")
 
