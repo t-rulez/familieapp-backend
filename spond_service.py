@@ -44,7 +44,7 @@ class SpondService:
                 except Exception as ge:
                     logger.warning(f"[SPOND] Kunne ikke hente grupper: {ge}")
 
-                raw_chats = await s.get_messages(max_chats=250)
+                raw_chats = await s.get_messages()
                 t1 = _time.time()
                 logger.info(f"[SPOND] get_messages: {t1-t0:.1f}s")
                 # API kan returnere liste eller dict med chats-nøkkel
