@@ -55,8 +55,8 @@ class SpondService:
                                 chat_msgs = chat_msgs.get("messages", []) or []
                             elif not isinstance(chat_msgs, list):
                                 chat_msgs = []
-                            if chat_msgs:
-                                for msg in chat_msgs:
+                            logger.info(f"[SPOND] Chat '{chat_name}': {len(chat_msgs)} meldinger")
+                            for msg in chat_msgs:
                                     # Hopp over hvis msg ikke er en dict
                                     if not isinstance(msg, dict):
                                         continue
@@ -71,6 +71,8 @@ class SpondService:
                                     normalized = self._normalize_message(msg, chat)
                                     if normalized:
                                         results.append(normalized)
+                                    else:
+                                        logger.debug(f"[SPOND] Melding ignorert: {msg.get('text','')[:50]}")
                         except Exception as e:
                             logger.warning(f"[SPOND] Feil fra chat '{chat_name}': {e}")
                 else:
