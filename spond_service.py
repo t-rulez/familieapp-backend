@@ -71,7 +71,7 @@ class SpondService:
                                 chat_msgs = []
                             logger.info(f"[SPOND] Chat '{chat_name}' (id={chat_id[:8] if chat_id else 'none'}): {len(chat_msgs)} meldinger")
                             if not chat_name:
-                                logger.info(f"[SPOND] Tom chat-keys: {list(chat.keys())}")
+                                logger.info(f"[SPOND] Tom chat-keys: {list(chat.keys())}, community={chat.get('community')}, type={chat.get('type')}, participants={len(chat.get('participants',[]))}")
                             for msg in chat_msgs:
                                     # Hopp over hvis msg ikke er en dict
                                     if not isinstance(msg, dict):
