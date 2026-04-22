@@ -44,7 +44,7 @@ class SpondService:
                 except Exception as ge:
                     logger.warning(f"[SPOND] Kunne ikke hente grupper: {ge}")
 
-                chats = await s.get_messages()
+                chats = await s.get_messages(max_chats=250)
                 t1 = _time.time()
                 logger.info(f"[SPOND] get_messages: {t1-t0:.1f}s")
                 if chats:
@@ -53,7 +53,7 @@ class SpondService:
                     for chat in chats:
                         chat_id = chat.get("id", "")
                         chat_type = chat.get("type", "")
-                        # Hopp over 1:1 direktemeldinger
+                        # Hopp over kun private 1:1 uten gruppe-tilknytning
                         if chat_type in ("DIRECT", "direct"):
                             continue
                         # Hopp over chatter uten groupId (private chatter)
@@ -63,13 +63,18 @@ class SpondService:
                                 continue  # 1:1 chat
                         community_id = (chat.get("community") or {}).get("id", "").upper()
                         group_id = (chat.get("groupId") or "").upper()
-                        chat_name = (
-                            chat.get("name") or
+                        resolved_group = (
                             group_map.get(community_id) or
                             group_map.get(group_id) or
                             (chat.get("community") or {}).get("name", "") or
                             ""
                         )
+                        chat_name = chat.get("name") or resolved_group
+                        # For DM fra gruppe – bruk gruppenavn som kontekst
+                        if not chat_name and chat_type in ("DM", "dm"):
+                            chat_name = resolved_group or "Direktemelding"
+                        elif not chat_name:
+                            chat_name = resolved_group
                         if not chat_id or chat_id in seen_chat_ids:
                             continue
                         seen_chat_ids.add(chat_id)
