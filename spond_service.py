@@ -214,7 +214,7 @@ class SpondService:
             return {
                 "id": f"spond-post-{post_id}",
                 "source": "spond",
-                "sourceLabel": "Spond",
+                "sourceLabel": "Innlegg",
                 "category": group_name or "Spond",
                 "title": title,
                 "tldr": text[:120] + ("..." if len(text) > 120 else ""),

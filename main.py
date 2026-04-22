@@ -643,7 +643,7 @@ async def update_settings(updates: dict, user: CurrentUser):
 
 @app.get("/messages")
 async def get_messages(user: CurrentUser):
-    messages = await get_all_messages(user_id=user["id"])
+    messages = await get_all_messages(user_id=user["id"], limit=1000)
     # Hent nyeste updated_at fra brukerens meldinger som "sist synkronisert"
     from database import get_pool
     pool = await get_pool()
