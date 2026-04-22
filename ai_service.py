@@ -101,7 +101,8 @@ async def score_relevance(
     read_examples: list[dict],
     skipped_examples: list[dict],
     user_profile: str | None,
-    user_id: str = None
+    user_id: str = None,
+    user_api_key: str = None
 ) -> dict:
     """
     Vurderer relevansen av en melding basert på brukerens tidligere valg.
