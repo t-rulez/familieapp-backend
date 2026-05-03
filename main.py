@@ -224,12 +224,19 @@ async def run_sync_all():
 
 
 async def sync_loop():
+    import pytz as _pytz
+    _oslo = _pytz.timezone("Europe/Oslo")
     while True:
         try:
             await run_sync_all()
         except Exception as e:
             logger.error(f"Synkronisering feilet: {e}")
-        await asyncio.sleep(30 * 60)
+        # Natt (23:00-06:00): 90 min, dag: 30 min
+        hour = datetime.now(_oslo).hour
+        is_night = hour >= 23 or hour < 6
+        interval = 90 * 60 if is_night else 30 * 60
+        logger.info(f"[SYNC] Neste synk om {interval//60} min ({'natt' if is_night else 'dag'})")
+        await asyncio.sleep(interval)
 
 
 async def evening_summary_loop():
@@ -249,26 +256,31 @@ async def evening_summary_loop():
                 if not user.get("evening_summary_enabled"):
                     continue
                 uid = user["id"]
-                # Allerede sendt i dag?
                 if last_sent.get(uid) == today_key:
                     continue
-                # Hent konfigurert tidspunkt
+                # Hent konfigurert tidspunkt – kun hele timer
                 time_str = user.get("evening_summary_time") or "20:00"
                 try:
-                    h, m = int(time_str.split(":")[0]), int(time_str.split(":")[1])
+                    h = int(time_str.split(":")[0])
                 except Exception:
-                    h, m = 20, 0
-                if now_oslo.hour == h and now_oslo.minute == m:
+                    h = 20
+                if now_oslo.hour == h and now_oslo.minute == 0:
                     logger.info(f"[EVENING] Sender til {uid[:8]}...")
-                    last_sent[uid] = today_key  # Marker som sendt FØR kallet
+                    last_sent[uid] = today_key
                     try:
                         await send_evening_summary(user)
                     except Exception as e:
                         logger.error(f"[EVENING] Feilet for {uid}: {e}")
-            await asyncio.sleep(50)  # 50 sek – aldri to kjøringer innen samme minutt
+
+            # Sleep frem til neste hele time
+            now_oslo = datetime.now(oslo_tz)
+            mins_to_next_hour = 60 - now_oslo.minute
+            secs_to_next_hour = mins_to_next_hour * 60 - now_oslo.second
+            logger.debug(f"[EVENING] Neste sjekk om {mins_to_next_hour} min")
+            await asyncio.sleep(secs_to_next_hour)
         except Exception as e:
             logger.error(f"[EVENING] Loop feilet: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(3600)
 
 
 async def send_evening_summary(user: dict):
