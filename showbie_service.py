@@ -450,7 +450,7 @@ class ShowbieService:
                         "content-type": "application/json"
                     },
                     json={
-                        "model": "claude-sonnet-4-20250514",
+                        "model": "claude-sonnet-5",
                         "max_tokens": 2000,
                         "messages": [{"role": "user", "content": image_contents}]
                     }

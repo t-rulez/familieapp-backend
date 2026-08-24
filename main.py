@@ -393,7 +393,7 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 150,
+            json={"model": "claude-sonnet-5", "max_tokens": 150,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
@@ -644,7 +644,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "wa_service_url", "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
-        "evening_summary_enabled", "evening_summary_time", "push_new_messages_enabled",
+        "evening_summary_enabled", "evening_summary_time",
         "family_context", "ai_learned_context", "claude_api_key"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -1128,12 +1128,6 @@ async def notify_new_messages(user_id: str, new_count: int):
     if new_count <= 0:
         return
     try:
-        # Sjekk om brukeren har skrudd av push for nye meldinger
-        from users import get_user_by_id
-        user = await get_user_by_id(user_id)
-        if user and user.get("push_new_messages_enabled") is False:
-            logger.info(f"[PUSH] Nye meldinger-push deaktivert for bruker {user_id}")
-            return
         subs = await get_push_subscriptions(user_id)
         if not subs:
             return
@@ -1296,7 +1290,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 1200, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
