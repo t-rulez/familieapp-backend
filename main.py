@@ -1346,7 +1346,15 @@ async def ai_learn(req: dict, user: CurrentUser):
             json={
                 "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 150,
-                "system": "Trekk ut ny personkontekst fra spoersmaal og svar. Returner BARE en kort setning med ny info om person/lag/aktivitet, eller tom streng hvis ingen ny info. Maks 100 tegn. Eksempel: 'Gustav: G2015, Ready Rod, fotball'",
+                "system": (
+                    "Trekk ut EN ting verdt å huske til senere fra spørsmålet/svaret, enten:\n"
+                    "(a) fakta om familiemedlemmer/lag/aktiviteter, f.eks. 'Gustav: G2015, Ready Rod, fotball', eller\n"
+                    "(b) en instruks/preferanse fra brukeren om HVORDAN du bør svare eller hva du bør prioritere "
+                    "fremover, f.eks. 'Ta alltid med turdager i ukesoppsummeringer'. "
+                    "Bruk kun (b) når brukeren tydelig ber om en varig endring i hvordan du svarer – "
+                    "ikke ved vanlige spørsmål.\n"
+                    "Returner BARE én kort setning, eller tom streng hvis ingen ny info verdt å huske. Maks 100 tegn."
+                ),
                 "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
             }
         )
