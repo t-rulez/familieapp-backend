@@ -44,7 +44,7 @@ from users import (
 from auth import (
     verify_password, create_token, decode_token
 )
-from ai_service import generate_tldr, score_relevance, generate_user_profile, extract_text
+from ai_service import generate_tldr, score_relevance, generate_user_profile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -127,15 +127,30 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             from database import get_pool
             child_ids = [c.strip() for c in (user.get("showbie_child_ids") or "").split(",") if c.strip()]
             svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids, user_api_key=_get_api_key(user))
-            # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering
+            # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering.
+            # Unntak: filposter (ikke kommentarer) uten "Innhold:"-seksjon i body
+            # mangler tekst fra Claude Vision (f.eks. pga. en tidligere feil i
+            # svar-parsingen) og hentes derfor på nytt i stedet for å hoppes over.
             pool = await get_pool()
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id FROM messages WHERE user_id = $1 AND source = 'showbie'", user_id
+                    "SELECT id, body FROM messages WHERE user_id = $1 AND source = 'showbie'", user_id
                 )
-            existing_ids = {r["id"] for r in rows}
-            logger.info(f"[SHOWBIE] {len(existing_ids)} eksisterende meldinger i DB")
-            msgs = await svc.fetch_all(since=since, upsert_fn=upsert_messages, user_id=user_id, existing_ids=existing_ids)
+            existing_ids = {
+                r["id"] for r in rows
+                if r["id"].startswith("showbie-comment-") or "\n\nInnhold:\n" in (r["body"] or "")
+            }
+            skipped_for_retry = len(rows) - len(existing_ids)
+            logger.info(f"[SHOWBIE] {len(existing_ids)} eksisterende meldinger i DB (hopper over)")
+            # fetch_all sitt "since"-filter hopper over hele assignments basert på
+            # dato, før enkeltfiler i det hele tatt sjekkes. Er det filposter med
+            # manglende innhold, må vi derfor skanne alle assignments (since=None)
+            # for i det hele tatt å nå fram til dem – existing_ids sørger for at
+            # allerede fullstendige poster likevel hoppes raskt over under vegs.
+            showbie_since = None if skipped_for_retry else since
+            if skipped_for_retry:
+                logger.info(f"[SHOWBIE] {skipped_for_retry} filposter mangler innhold – full skann for å hente dem på nytt")
+            msgs = await svc.fetch_all(since=showbie_since, upsert_fn=upsert_messages, user_id=user_id, existing_ids=existing_ids)
             logger.info(f"[SHOWBIE] {len(msgs)} nye meldinger hentet")
             return msgs
         except Exception as e:
@@ -393,13 +408,13 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 150,
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 150,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
             logger.error(f"[EVENING] API feil: {resp.status_code}")
             return
-        answer = extract_text(resp.json().get("content", [])).strip()
+        answer = resp.json()["content"][0]["text"].strip()
 
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
@@ -1290,7 +1305,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 1200, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
@@ -1301,7 +1316,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:200]}")
                 return {"answer": f"Beklager, API-feil ({res.status_code}). Prøv igjen."}
             data = res.json()
-            answer = extract_text(data.get("content", []))
+            answer = data.get("content", [{}])[0].get("text", "")
             if not answer:
                 logger.error(f"[AI/CHAT] Tomt svar: {data}")
                 return {"answer": "Beklager, fikk tomt svar. Prøv igjen."}
@@ -1335,7 +1350,7 @@ async def ai_learn(req: dict, user: CurrentUser):
                 "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
             }
         )
-    learned = extract_text(res.json().get("content", [])).strip()
+    learned = res.json().get("content", [{}])[0].get("text", "").strip()
     return {"learned": learned}
 
 
