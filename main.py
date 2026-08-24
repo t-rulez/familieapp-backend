@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 # Skru av støy fra tredjeparts biblioteker
@@ -1391,7 +1392,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 @app.post("/ai/learn")
 async def ai_learn(req: dict, user: CurrentUser):
     import httpx
-    import re
     settings = await get_user_settings(user["id"])
     api_key = _get_api_key(settings)
     if not api_key:
@@ -1405,12 +1405,15 @@ async def ai_learn(req: dict, user: CurrentUser):
                 "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 150,
                 "system": (
-                    "Trekk ut EN ting verdt å huske til senere fra spørsmålet/svaret, enten:\n"
-                    "(a) fakta om familiemedlemmer/lag/aktiviteter, f.eks. 'Gustav: G2015, Ready Rod, fotball', eller\n"
-                    "(b) en instruks/preferanse fra brukeren om HVORDAN du bør svare eller hva du bør prioritere "
-                    "fremover, f.eks. 'Ta alltid med turdager i ukesoppsummeringer'. "
-                    "Bruk kun (b) når brukeren tydelig ber om en varig endring i hvordan du svarer – "
+                    "Trekk ut EN ting fra spørsmålet/svaret: en instruks/preferanse fra BRUKEREN "
+                    "(ikke fra AI-svaret) om HVORDAN du bør svare eller hva du bør prioritere fremover, "
+                    "f.eks. 'Ta alltid med turdager i ukesoppsummeringer'.\n"
+                    "Bruk KUN dette når brukeren tydelig ber om en varig endring i hvordan du svarer – "
                     "ikke ved vanlige spørsmål.\n"
+                    "IKKE trekk ut fakta om familiemedlemmer, lag eller aktiviteter (f.eks. hvem som "
+                    "spiller på hvilket lag) – slik informasjon vedlikeholdes manuelt av brukeren i "
+                    "Familieprofilen, og skal ALDRI læres automatisk herfra. Er du usikker på om noe er "
+                    "en varig preferanse eller bare et faktum/svar på spørsmålet, svar NULL.\n"
                     "VIKTIG format-regel: Svar KUN med selve setningen – ingen prefiks som 'Ny personkontekst:', "
                     "ingen anførselstegn, ingen ** eller ``` markdown, ingen forklaring i parentes.\n"
                     "Hvis det ikke er noe nytt å huske: svar med ETT ord: NULL. Ikke skriv 'tom streng' eller "
