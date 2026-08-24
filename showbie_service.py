@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Optional
 import httpx
 
+from ai_service import extract_text
+
 logger = logging.getLogger(__name__)
 
 SHOWBIE_HEADERS = {
@@ -468,7 +470,7 @@ class ShowbieService:
                             )
                         except Exception:
                             pass
-                    return data.get("content", [{}])[0].get("text", "")
+                    return extract_text(data.get("content", []))
         except Exception as e:
             logger.error(f"Claude Vision feilet: {e}")
         return ""

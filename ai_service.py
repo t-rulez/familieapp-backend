@@ -10,6 +10,21 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-5"
 
 
+def extract_text(content: list) -> str:
+    """
+    Henter tekst-innholdet fra en Claude API-respons sin content-liste.
+    Sonnet 5 har adaptive thinking alltid på, så svaret kan starte med en
+    'thinking'-blokk før selve teksten. Denne funksjonen finner riktig
+    'text'-blokk uansett rekkefølge, i stedet for å anta content[0].
+    """
+    if not content:
+        return ""
+    for block in content:
+        if block.get("type") == "text":
+            return block.get("text", "")
+    return ""
+
+
 async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_key: str = None) -> str:
     """Kaller Claude API med automatisk retry ved overbelastning (529) eller rate limit (429)."""
     import asyncio
@@ -50,7 +65,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_k
                 usage = data.get("usage", {})
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)
-                text = data["content"][0]["text"].strip()
+                text = extract_text(data.get("content", [])).strip()
                 return text, tokens_in, tokens_out
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:

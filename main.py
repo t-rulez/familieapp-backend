@@ -44,7 +44,7 @@ from users import (
 from auth import (
     verify_password, create_token, decode_token
 )
-from ai_service import generate_tldr, score_relevance, generate_user_profile
+from ai_service import generate_tldr, score_relevance, generate_user_profile, extract_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -399,7 +399,7 @@ async def send_evening_summary(user: dict):
         if resp.status_code != 200:
             logger.error(f"[EVENING] API feil: {resp.status_code}")
             return
-        answer = resp.json()["content"][0]["text"].strip()
+        answer = extract_text(resp.json().get("content", [])).strip()
 
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
@@ -1301,7 +1301,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:200]}")
                 return {"answer": f"Beklager, API-feil ({res.status_code}). Prøv igjen."}
             data = res.json()
-            answer = data.get("content", [{}])[0].get("text", "")
+            answer = extract_text(data.get("content", []))
             if not answer:
                 logger.error(f"[AI/CHAT] Tomt svar: {data}")
                 return {"answer": "Beklager, fikk tomt svar. Prøv igjen."}
@@ -1335,7 +1335,7 @@ async def ai_learn(req: dict, user: CurrentUser):
                 "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
             }
         )
-    learned = res.json().get("content", [{}])[0].get("text", "").strip()
+    learned = extract_text(res.json().get("content", [])).strip()
     return {"learned": learned}
 
 
