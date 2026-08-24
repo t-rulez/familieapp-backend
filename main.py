@@ -1334,6 +1334,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 @app.post("/ai/learn")
 async def ai_learn(req: dict, user: CurrentUser):
     import httpx
+    import re
     settings = await get_user_settings(user["id"])
     api_key = _get_api_key(settings)
     if not api_key:
@@ -1353,13 +1354,41 @@ async def ai_learn(req: dict, user: CurrentUser):
                     "fremover, f.eks. 'Ta alltid med turdager i ukesoppsummeringer'. "
                     "Bruk kun (b) når brukeren tydelig ber om en varig endring i hvordan du svarer – "
                     "ikke ved vanlige spørsmål.\n"
-                    "Returner BARE én kort setning, eller tom streng hvis ingen ny info verdt å huske. Maks 100 tegn."
+                    "VIKTIG format-regel: Svar KUN med selve setningen – ingen prefiks som 'Ny personkontekst:', "
+                    "ingen anførselstegn, ingen ** eller ``` markdown, ingen forklaring i parentes.\n"
+                    "Hvis det ikke er noe nytt å huske: svar med ETT ord: NULL. Ikke skriv 'tom streng' eller "
+                    "noen forklaring – bare ordet NULL, ingenting annet.\n"
+                    "Maks 100 tegn."
                 ),
                 "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
             }
         )
-    learned = extract_text(res.json().get("content", [])).strip()
+    learned = _clean_learned_text(extract_text(res.json().get("content", [])))
     return {"learned": learned}
+
+
+def _clean_learned_text(raw: str) -> str:
+    """
+    Renser Haiku sitt svar fra /ai/learn før det lagres i 'Lært kontekst'.
+    Sikkerhetsnett i tillegg til systemprompt-instruksene, siden Haiku ikke
+    alltid følger formatet nøyaktig (f.eks. skriver forklarende tekst i
+    stedet for en ekte tom streng når det ikke er ny info).
+    """
+    if not raw:
+        return ""
+    t = raw.strip()
+    # Fjern kodeblokk-markører og markdown fet skrift
+    t = re.sub(r'```+', '', t)
+    t = re.sub(r'\*\*', '', t)
+    # Fjern vanlige prefikser modellen noen ganger legger på
+    t = re.sub(r'^(ny\s+personkontekst|personkontekst)\s*:\s*', '', t, flags=re.IGNORECASE)
+    t = t.strip(' \n"\'')
+    # Filtrer bort "ingen ny info"-varianter, uansett hvordan de er formulert
+    if re.match(r'^(null|tom\s+streng|ingen\s+ny)', t, flags=re.IGNORECASE):
+        return ""
+    if not t:
+        return ""
+    return t[:150]
 
 
 # ─── AI historikk ─────────────────────────────────────────────────────────────
