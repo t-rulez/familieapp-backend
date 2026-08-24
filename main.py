@@ -30,6 +30,7 @@ from database import (
     init_db, init_ai_tables, init_push_tables,
     get_api_usage_stats,
     upsert_messages, get_all_messages, update_message_status,
+    update_messages_status_bulk, get_similar_unread_messages, get_category_skip_rate,
     get_stats, get_classified_messages, get_user_profile,
     save_user_profile, save_ai_result, get_unprocessed_messages,
     save_push_subscription, delete_push_subscription, get_push_subscriptions,
@@ -69,6 +70,38 @@ CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 # ─── AI-behandling ────────────────────────────────────────────────────────────
 
+async def _classify_message(msg: dict, read_examples: list, skipped_examples: list,
+                             user_profile, user_id: str, api_key: str = None) -> dict:
+    """
+    Klassifiserer én melding: genererer TL;DR og vurderer relevans.
+
+    Bruker en regelbasert snarvei for kilde+kategori-kombinasjoner der brukeren
+    historisk har markert minst 80% som 'ikke relevant' (med minst 5 tidligere
+    eksempler å basere seg på). Da hoppes selve AI-relevansvurderingen over og
+    meldingen settes direkte til auto_skip – raskere, billigere, og mer
+    konsekvent enn å la AI-en vurdere hver enkeltmelding isolert på nytt.
+    """
+    tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
+
+    skip_rate = None
+    try:
+        if user_id and msg.get("source") and msg.get("category"):
+            skip_rate = await get_category_skip_rate(user_id, msg["source"], msg["category"])
+    except Exception as e:
+        logger.warning(f"[AI] Kunne ikke hente skip-rate: {e}")
+
+    if skip_rate is not None and skip_rate >= 0.8:
+        return {
+            "tldr": tldr,
+            "score": "low",
+            "auto_skip": True,
+            "reason": f"Automatisk – {round(skip_rate * 100)}% historisk ikke relevant fra denne kilden"
+        }
+
+    relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id, user_api_key=api_key)
+    return {"tldr": tldr, **relevance}
+
+
 async def run_ai_processing(user_id: str):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return
@@ -80,22 +113,14 @@ async def run_ai_processing(user_id: str):
     user_profile = await get_user_profile(user_id=user_id)
     for msg in unprocessed:
         try:
-            tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
-            relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id)
-            await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
+            result = await _classify_message(msg, read_examples, skipped_examples, user_profile, user_id)
+            await save_ai_result(msg["id"], result["tldr"], result["score"], result["reason"], result["auto_skip"])
             src = msg.get('source','').upper()
-            logger.info(f"[AI/{src}] [{relevance['score']}] {msg['title'][:50]}")
+            logger.info(f"[AI/{src}] [{result['score']}] {msg['title'][:50]}")
             await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"AI-behandling feilet for {msg.get('id')}: {e}")
-    try:
-        total = len(read_examples) + len(skipped_examples)
-        if total >= 20:
-            new_profile = await generate_user_profile(read_examples, skipped_examples, user_profile)
-            if new_profile and new_profile != user_profile:
-                await save_user_profile(new_profile, user_id=user_id)
-    except Exception as e:
-        logger.error(f"Profiloppdatering feilet: {e}")
+    await _maybe_update_profile(user_id)
 
 # ─── Synk per bruker ─────────────────────────────────────────────────────────
 
@@ -695,10 +720,42 @@ async def update_message(message_id: str, update: StatusUpdate, user: CurrentUse
     asyncio.create_task(_maybe_update_profile(user["id"]))
     return {"ok": True}
 
+
+@app.get("/messages/{message_id}/similar")
+async def get_similar_messages(message_id: str, user: CurrentUser):
+    """
+    Finner andre uleste meldinger som ligner på den gitte (samme kilde +
+    kategori, evt. samme Showbie-oppgave). Brukes til å foreslå at brukeren
+    setter samme status på flere like meldinger med ett klikk.
+    """
+    similar = await get_similar_unread_messages(message_id, user_id=user["id"])
+    return {"similar": similar}
+
+
+class BulkStatusUpdate(BaseModel):
+    ids: list[str]
+    status: str
+
+@app.post("/messages/bulk-status")
+async def bulk_update_message_status(update: BulkStatusUpdate, user: CurrentUser):
+    if update.status not in ("read", "skipped", "unread"):
+        raise HTTPException(status_code=400, detail="Ugyldig status")
+    if not update.ids:
+        return {"ok": True, "count": 0}
+    count = await update_messages_status_bulk(update.ids, update.status, user_id=user["id"])
+    asyncio.create_task(_maybe_update_profile(user["id"]))
+    return {"ok": True, "count": count}
+
 async def _maybe_update_profile(user_id: str):
+    """
+    Regenererer brukerprofilen hver 5. klassifiserte melding (lest eller
+    ikke relevant) – i stedet for kun ved runde 20-tall som før. Gir
+    raskere tilpasning til brukerens preferanser etter manuelle rettinger.
+    """
     try:
         read_ex, skip_ex = await get_classified_messages(user_id=user_id)
-        if len(read_ex) + len(skip_ex) >= 20:
+        total = len(read_ex) + len(skip_ex)
+        if total >= 5 and total % 5 == 0:
             existing = await get_user_profile(user_id=user_id)
             new_profile = await generate_user_profile(read_ex, skip_ex, existing)
             if new_profile and new_profile != existing:
@@ -736,15 +793,15 @@ async def _process_all_loop(user_id: str):
         user_profile = await get_user_profile(user_id=user_id)
         for msg in unprocessed:
             try:
-                tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
-                relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id, user_api_key=api_key)
-                await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
+                result = await _classify_message(msg, read_examples, skipped_examples, user_profile, user_id, api_key=api_key)
+                await save_ai_result(msg["id"], result["tldr"], result["score"], result["reason"], result["auto_skip"])
                 total += 1
-                logger.info(f"[AI/PROCESS-ALL] [{relevance['score']}] {msg['title'][:50]}")
+                logger.info(f"[AI/PROCESS-ALL] [{result['score']}] {msg['title'][:50]}")
                 await asyncio.sleep(0.3)
             except Exception as e:
                 logger.error(f"[AI/PROCESS-ALL] Feil: {e}")
                 await asyncio.sleep(1)
+        await _maybe_update_profile(user_id)
         await asyncio.sleep(1)
 
 @app.post("/sync")

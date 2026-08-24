@@ -7,22 +7,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-5"
-
-
-def extract_text(content: list) -> str:
-    """
-    Henter tekst-innholdet fra en Claude API-respons sin content-liste.
-    Sonnet 5 har adaptive thinking alltid på, så svaret kan starte med en
-    'thinking'-blokk før selve teksten. Denne funksjonen finner riktig
-    'text'-blokk uansett rekkefølge, i stedet for å anta content[0].
-    """
-    if not content:
-        return ""
-    for block in content:
-        if block.get("type") == "text":
-            return block.get("text", "")
-    return ""
+MODEL = "claude-sonnet-4-20250514"
 
 
 async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_key: str = None) -> str:
@@ -65,7 +50,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_k
                 usage = data.get("usage", {})
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)
-                text = extract_text(data.get("content", [])).strip()
+                text = data["content"][0]["text"].strip()
                 return text, tokens_in, tokens_out
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
@@ -141,17 +126,17 @@ relevant for denne spesifikke brukeren basert på deres tidligere valg.
 
 Svar ALLTID med gyldig JSON og ingenting annet."""
 
-        # Bygg eksempel-seksjoner
+        # Bygg eksempel-seksjoner (økt fra 15 til 30 for bedre mønstergjenkjenning)
         read_section = ""
         if read_examples:
             examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}" 
-                       for m in read_examples[:15]]
+                       for m in read_examples[:30]]
             read_section = "MELDINGER BRUKEREN HAR LEST (interessant):\n" + "\n".join(examples)
 
         skip_section = ""
         if skipped_examples:
             examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}" 
-                       for m in skipped_examples[:15]]
+                       for m in skipped_examples[:30]]
             skip_section = "MELDINGER BRUKEREN HAR IGNORERT (ikke relevant):\n" + "\n".join(examples)
 
         profile_section = ""
@@ -220,10 +205,10 @@ async def generate_user_profile(
 ) -> str | None:
     """
     Genererer/oppdaterer en tekstlig brukerprofil basert på klassifiseringer.
-    Kjøres når brukeren har gjort nok valg (20+).
+    Kjøres når brukeren har gjort nok valg (5+).
     """
     total = len(read_examples) + len(skipped_examples)
-    if total < 20:
+    if total < 5:
         return existing_profile
 
     try:
