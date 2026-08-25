@@ -81,12 +81,19 @@ async def _classify_message(msg: dict, read_examples: list, skipped_examples: li
     eksempler å basere seg på). Da hoppes selve AI-relevansvurderingen over og
     meldingen settes direkte til auto_skip – raskere, billigere, og mer
     konsekvent enn å la AI-en vurdere hver enkeltmelding isolert på nytt.
+
+    Begrenset til WhatsApp: denne kilden har typisk høyfrekvent, repeterende
+    innhold der et stabilt mønster er meningsfullt (f.eks. en foreldregruppe
+    brukeren sjelden bryr seg om). Showbie/Spond/e-post kan derimot blande
+    rutine-innhold og viktige engangsmeldinger (som en ukentlig ukeplan) under
+    SAMME kilde+kategori – der ville snarveien risikere å skjule noe viktig
+    bare fordi andre meldinger i samme kategori historisk ble hoppet over.
     """
     tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
 
     skip_rate = None
     try:
-        if user_id and msg.get("source") and msg.get("category"):
+        if user_id and msg.get("source") == "whatsapp" and msg.get("category"):
             skip_rate = await get_category_skip_rate(user_id, msg["source"], msg["category"])
     except Exception as e:
         logger.warning(f"[AI] Kunne ikke hente skip-rate: {e}")
@@ -357,7 +364,6 @@ async def send_evening_summary(user: dict):
         "SELECT id, source, source_label, category, title, tldr, body,"
         " time_label AS time, timestamp, priority, status, meta"
         " FROM messages WHERE user_id = $1"
-        " AND status != 'skipped'"
         " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2 OR LOWER(category) LIKE $2)"
         " ORDER BY timestamp DESC LIMIT 100"
     )
@@ -1277,7 +1283,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             " time_label AS time, timestamp, priority, status, meta"
             " FROM messages"
             " WHERE user_id = $1"
-            " AND status != 'skipped'"
             f" {date_filter}"
             " AND (LOWER(title) LIKE $2"
             " OR LOWER(tldr) LIKE $2"
