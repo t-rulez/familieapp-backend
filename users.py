@@ -104,7 +104,7 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_child_ids TEXT DEFAULT ''")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_enabled BOOLEAN DEFAULT FALSE")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_time TEXT DEFAULT '20:00'")
-        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS push_new_messages_enabled BOOLEAN DEFAULT TRUE")
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS new_messages_push_enabled BOOLEAN DEFAULT TRUE")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
@@ -177,11 +177,8 @@ async def get_user_by_id(user_id: str) -> Optional[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT u.id, u.email, u.display_name, u.is_admin, u.last_login,
-                   s.push_new_messages_enabled, s.evening_summary_enabled
-            FROM users u
-            LEFT JOIN user_settings s ON u.id = s.user_id
-            WHERE u.id = $1
+            SELECT id, email, display_name, is_admin, last_login
+            FROM users WHERE id = $1
         """, user_id)
     return dict(row) if row else None
 

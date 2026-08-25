@@ -691,7 +691,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "wa_service_url", "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
-        "evening_summary_enabled", "evening_summary_time",
+        "evening_summary_enabled", "evening_summary_time", "new_messages_push_enabled",
         "family_context", "ai_learned_context", "claude_api_key"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -1207,6 +1207,11 @@ async def notify_new_messages(user_id: str, new_count: int):
     if new_count <= 0:
         return
     try:
+        settings = await get_user_settings(user_id)
+        # Uavhengig av kveldsvarsel: la bruker skru av "nye meldinger"-varsel
+        # separat, uten at det påvirker eller skjuler kveldsvarsel-innstillingen.
+        if settings and settings.get("new_messages_push_enabled") is False:
+            return
         subs = await get_push_subscriptions(user_id)
         if not subs:
             return
