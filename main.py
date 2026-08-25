@@ -1254,6 +1254,16 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     date_filter = "AND timestamp > NOW() - INTERVAL '14 days'" if is_time_query else ""
     if is_time_query:
         logger.info(f"[AI/CHAT] Tidsspørsmål – begrenser til siste 14 dager")
+        # Legg til ukenummer som søkeord – ukeplaner fra Showbie heter typisk
+        # "UKE 35 ...pdf", mens spørsmålet ofte kun inneholder datoer. Uten
+        # dette søkeordet blir slike filer ofte ikke funnet.
+        current_week = str(datetime.now().isocalendar()[1])
+        if current_week not in words:
+            words.append(current_week)
+        if any(w in {'neste', 'kommende'} for w in words):
+            next_week = str(datetime.now().isocalendar()[1] + 1)
+            if next_week not in words:
+                words.append(next_week)
 
     if words:
         logger.info(f"[AI/CHAT] Søkeord: {words}")
