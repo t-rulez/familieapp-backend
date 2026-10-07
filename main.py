@@ -1386,11 +1386,27 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         + msg_context
     )
 
-    messages = [
-        m for m in req.history[-6:]
-        if m.get("role") in ("user", "assistant") and "⏳" not in m.get("content", "")
-    ]
-    messages.append({"role": "user", "content": req.question})
+    # Rens historikken før den sendes til Anthropic. API-et avviser (400) hvis
+    # første melding ikke har rollen 'user', hvis en melding er tom, eller hvis
+    # strukturen er ugyldig. Siden vi bare tar de siste 6 meldingene kan
+    # utsnittet lett starte på en assistent-melding. Frontend sender dessuten
+    # selve spørsmålet som siste historikk-element (uten lengde-instruksjonen);
+    # det fjernes her, siden spørsmålet legges til på nytt nedenfor.
+    cleaned = []
+    for m in req.history[-6:]:
+        role = m.get("role")
+        content = (m.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content or "⏳" in content:
+            continue
+        if cleaned and cleaned[-1]["role"] == role:
+            cleaned[-1]["content"] += "\n\n" + content  # slå sammen like roller
+        else:
+            cleaned.append({"role": role, "content": content})
+    while cleaned and cleaned[0]["role"] != "user":
+        cleaned.pop(0)
+    if cleaned and cleaned[-1]["role"] == "user":
+        cleaned.pop()
+    messages = cleaned + [{"role": "user", "content": req.question}]
 
     import asyncio as _asyncio
     for attempt in range(3):
@@ -1407,8 +1423,13 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 await _asyncio.sleep(wait)
                 continue
             if res.status_code != 200:
-                logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:200]}")
-                return {"answer": f"Beklager, API-feil ({res.status_code}). Prøv igjen."}
+                logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:500]}")
+                try:
+                    err_msg = res.json().get("error", {}).get("message", "")
+                except Exception:
+                    err_msg = ""
+                detail = f": {err_msg[:200]}" if err_msg else ""
+                return {"answer": f"Beklager, API-feil ({res.status_code}){detail}. Prøv igjen."}
             data = res.json()
             answer = extract_text(data.get("content", []))
             if not answer:
