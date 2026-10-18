@@ -1,8 +1,9 @@
 import os
 import asyncio
 import logging
-import re
 from datetime import datetime, timezone
+
+import httpx
 
 # Skru av støy fra tredjeparts biblioteker
 logging.getLogger("icalendar").setLevel(logging.CRITICAL)
@@ -23,15 +24,15 @@ from typing import Optional, Annotated
 
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, EmailStr
 
 from spond_service import SpondService
 from email_service import EmailService
 from database import (
     init_db, init_ai_tables, init_push_tables,
-    get_api_usage_stats,
+    get_api_usage_stats, get_pool,
     upsert_messages, get_all_messages, update_message_status,
-    update_messages_status_bulk, get_similar_unread_messages, get_category_skip_rate,
     get_stats, get_classified_messages, get_user_profile,
     save_user_profile, save_ai_result, get_unprocessed_messages,
     save_push_subscription, delete_push_subscription, get_push_subscriptions,
@@ -46,7 +47,7 @@ from users import (
 from auth import (
     verify_password, create_token, decode_token
 )
-from ai_service import generate_tldr, score_relevance, generate_user_profile, extract_text
+from ai_service import generate_tldr, score_relevance, generate_user_profile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,45 +72,6 @@ CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 # ─── AI-behandling ────────────────────────────────────────────────────────────
 
-async def _classify_message(msg: dict, read_examples: list, skipped_examples: list,
-                             user_profile, user_id: str, api_key: str = None) -> dict:
-    """
-    Klassifiserer én melding: genererer TL;DR og vurderer relevans.
-
-    Bruker en regelbasert snarvei for kilde+kategori-kombinasjoner der brukeren
-    historisk har markert minst 80% som 'ikke relevant' (med minst 5 tidligere
-    eksempler å basere seg på). Da hoppes selve AI-relevansvurderingen over og
-    meldingen settes direkte til auto_skip – raskere, billigere, og mer
-    konsekvent enn å la AI-en vurdere hver enkeltmelding isolert på nytt.
-
-    Begrenset til WhatsApp: denne kilden har typisk høyfrekvent, repeterende
-    innhold der et stabilt mønster er meningsfullt (f.eks. en foreldregruppe
-    brukeren sjelden bryr seg om). Showbie/Spond/e-post kan derimot blande
-    rutine-innhold og viktige engangsmeldinger (som en ukentlig ukeplan) under
-    SAMME kilde+kategori – der ville snarveien risikere å skjule noe viktig
-    bare fordi andre meldinger i samme kategori historisk ble hoppet over.
-    """
-    tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
-
-    skip_rate = None
-    try:
-        if user_id and msg.get("source") == "whatsapp" and msg.get("category"):
-            skip_rate = await get_category_skip_rate(user_id, msg["source"], msg["category"])
-    except Exception as e:
-        logger.warning(f"[AI] Kunne ikke hente skip-rate: {e}")
-
-    if skip_rate is not None and skip_rate >= 0.8:
-        return {
-            "tldr": tldr,
-            "score": "low",
-            "auto_skip": True,
-            "reason": f"Automatisk – {round(skip_rate * 100)}% historisk ikke relevant fra denne kilden"
-        }
-
-    relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id, user_api_key=api_key)
-    return {"tldr": tldr, **relevance}
-
-
 async def run_ai_processing(user_id: str):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return
@@ -121,14 +83,22 @@ async def run_ai_processing(user_id: str):
     user_profile = await get_user_profile(user_id=user_id)
     for msg in unprocessed:
         try:
-            result = await _classify_message(msg, read_examples, skipped_examples, user_profile, user_id)
-            await save_ai_result(msg["id"], result["tldr"], result["score"], result["reason"], result["auto_skip"])
+            tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
+            relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id)
+            await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
             src = msg.get('source','').upper()
-            logger.info(f"[AI/{src}] [{result['score']}] {msg['title'][:50]}")
+            logger.info(f"[AI/{src}] [{relevance['score']}] {msg['title'][:50]}")
             await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"AI-behandling feilet for {msg.get('id')}: {e}")
-    await _maybe_update_profile(user_id)
+    try:
+        total = len(read_examples) + len(skipped_examples)
+        if total >= 20:
+            new_profile = await generate_user_profile(read_examples, skipped_examples, user_profile)
+            if new_profile and new_profile != user_profile:
+                await save_user_profile(new_profile, user_id=user_id)
+    except Exception as e:
+        logger.error(f"Profiloppdatering feilet: {e}")
 
 # ─── Synk per bruker ─────────────────────────────────────────────────────────
 
@@ -157,33 +127,17 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             return []
         try:
             from showbie_service import ShowbieService
-            from database import get_pool
             child_ids = [c.strip() for c in (user.get("showbie_child_ids") or "").split(",") if c.strip()]
             svc = ShowbieService(token=user["showbie_token"], user_id=user["showbie_user_id"], fingerprint=user.get("showbie_fingerprint",""), child_ids=child_ids, user_api_key=_get_api_key(user))
-            # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering.
-            # Unntak: filposter (ikke kommentarer) uten "Innhold:"-seksjon i body
-            # mangler tekst fra Claude Vision (f.eks. pga. en tidligere feil i
-            # svar-parsingen) og hentes derfor på nytt i stedet for å hoppes over.
+            # Hent eksisterende Showbie-IDer fra DB for å unngå re-prosessering
             pool = await get_pool()
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id, body FROM messages WHERE user_id = $1 AND source = 'showbie'", user_id
+                    "SELECT id FROM messages WHERE user_id = $1 AND source = 'showbie'", user_id
                 )
-            existing_ids = {
-                r["id"] for r in rows
-                if r["id"].startswith("showbie-comment-") or "\n\nInnhold:\n" in (r["body"] or "")
-            }
-            skipped_for_retry = len(rows) - len(existing_ids)
-            logger.info(f"[SHOWBIE] {len(existing_ids)} eksisterende meldinger i DB (hopper over)")
-            # fetch_all sitt "since"-filter hopper over hele assignments basert på
-            # dato, før enkeltfiler i det hele tatt sjekkes. Er det filposter med
-            # manglende innhold, må vi derfor skanne alle assignments (since=None)
-            # for i det hele tatt å nå fram til dem – existing_ids sørger for at
-            # allerede fullstendige poster likevel hoppes raskt over under vegs.
-            showbie_since = None if skipped_for_retry else since
-            if skipped_for_retry:
-                logger.info(f"[SHOWBIE] {skipped_for_retry} filposter mangler innhold – full skann for å hente dem på nytt")
-            msgs = await svc.fetch_all(since=showbie_since, upsert_fn=upsert_messages, user_id=user_id, existing_ids=existing_ids)
+            existing_ids = {r["id"] for r in rows}
+            logger.info(f"[SHOWBIE] {len(existing_ids)} eksisterende meldinger i DB")
+            msgs = await svc.fetch_all(since=since, upsert_fn=upsert_messages, user_id=user_id, existing_ids=existing_ids)
             logger.info(f"[SHOWBIE] {len(msgs)} nye meldinger hentet")
             return msgs
         except Exception as e:
@@ -219,7 +173,6 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
         if isinstance(r, list):
             all_messages.extend(r)
 
-    from database import count_unread_messages
     inserted_ids = [m["id"] for m in all_messages]
     await upsert_messages(all_messages)
 
@@ -235,7 +188,6 @@ async def _ai_then_notify(user_id: str, inserted_ids: list):
     # Tell hvor mange av de nye meldingene som fortsatt er uleste etter AI
     if not inserted_ids:
         return
-    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         count = await conn.fetchval(
@@ -333,9 +285,8 @@ async def evening_summary_loop():
 
 async def send_evening_summary(user: dict):
     """Genererer og sender morgendagens oversikt til en bruker."""
-    import re, httpx, os
+    import re
     from datetime import date as _date, timedelta
-    from database import get_pool
 
     uid = user["id"]
     subs = await get_push_subscriptions(uid)
@@ -364,6 +315,7 @@ async def send_evening_summary(user: dict):
         "SELECT id, source, source_label, category, title, tldr, body,"
         " time_label AS time, timestamp, priority, status, meta"
         " FROM messages WHERE user_id = $1"
+        " AND status != 'skipped'"
         " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2 OR LOWER(category) LIKE $2)"
         " ORDER BY timestamp DESC LIMIT 100"
     )
@@ -423,12 +375,6 @@ async def send_evening_summary(user: dict):
     system = (
         f"Du er en familieassistent som gir daglige oversikter.\n"
         f"Dagens dato er {today_str}. I morgen er det {tomorrow_str}.\n"
-        f"VIKTIG om idrett/lag: Meldinger om fotball, håndball osv. nevner ofte KUN lagnavnet "
-        f"(f.eks. 'G11 Rød'), ikke hvilket barn det gjelder. Krysjekk lagnavnet mot FAMILIEPROFIL "
-        f"under for å finne riktig barn – ikke gjett.\n"
-        f"VIKTIG om sammenblanding: ALDRI bland informasjon fra to ulike meldinger til én hendelse. "
-        f"Attribuer kun detaljer (navn, posisjon osv.) til en aktivitet hvis detaljen står i SAMME "
-        f"melding som aktiviteten – ikke hent inn navn/detaljer fra en annen melding om samme tema.\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"{calendar_section}"
@@ -446,13 +392,13 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 150,
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 150,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
             logger.error(f"[EVENING] API feil: {resp.status_code}")
             return
-        answer = extract_text(resp.json().get("content", [])).strip()
+        answer = resp.json()["content"][0]["text"].strip()
 
     clean = re.sub(r'\*\*(.+?)\*\*', r'\1', answer)
     clean = re.sub(r'\*(.+?)\*', r'\1', clean)
@@ -515,6 +461,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Komprimer svar over 1 KB (typisk 70–85 % mindre trafikk på /messages)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # ─── Auth-endepunkter ─────────────────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
@@ -548,7 +497,6 @@ async def register(req: RegisterRequest):
 async def change_password(req: dict, user: CurrentUser):
     """Bytter passord for innlogget bruker."""
     from auth import verify_password, hash_password
-    from database import get_pool
 
     old_pw = req.get("old_password", "")
     new_pw = req.get("new_password", "")
@@ -576,9 +524,7 @@ async def forgot_password(req: dict):
     """Sender nytt midlertidig passord på e-post."""
     import secrets, string
     from email.mime.text import MIMEText
-    from users import get_user_by_email, get_user_settings
     from auth import hash_password
-    from database import get_pool
 
     email = (req.get("email") or "").strip().lower()
     if not email:
@@ -628,8 +574,7 @@ async def forgot_password(req: dict):
         resend_key = os.environ.get("RESEND_API_KEY", "")
         if not resend_key:
             raise Exception("RESEND_API_KEY er ikke satt")
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=10) as _client:
+        async with httpx.AsyncClient(timeout=10) as _client:
             _res = await _client.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
@@ -697,7 +642,7 @@ async def update_settings(updates: dict, user: CurrentUser):
         "wa_service_url", "wa_group_filter", "wa_category", "wa_source_label", "wa_enabled",
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
-        "evening_summary_enabled", "evening_summary_time", "new_messages_push_enabled",
+        "evening_summary_enabled", "evening_summary_time",
         "family_context", "ai_learned_context", "claude_api_key"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -711,7 +656,6 @@ async def get_messages(user: CurrentUser, limit: int = 500):
     limit = max(50, min(limit, 2000))  # Mellom 50 og 2000
     messages = await get_all_messages(user_id=user["id"], limit=limit)
     # Hent nyeste updated_at fra brukerens meldinger som "sist synkronisert"
-    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         newest = await conn.fetchval(
@@ -733,42 +677,10 @@ async def update_message(message_id: str, update: StatusUpdate, user: CurrentUse
     asyncio.create_task(_maybe_update_profile(user["id"]))
     return {"ok": True}
 
-
-@app.get("/messages/{message_id}/similar")
-async def get_similar_messages(message_id: str, user: CurrentUser):
-    """
-    Finner andre uleste meldinger som ligner på den gitte (samme kilde +
-    kategori, evt. samme Showbie-oppgave). Brukes til å foreslå at brukeren
-    setter samme status på flere like meldinger med ett klikk.
-    """
-    similar = await get_similar_unread_messages(message_id, user_id=user["id"])
-    return {"similar": similar}
-
-
-class BulkStatusUpdate(BaseModel):
-    ids: list[str]
-    status: str
-
-@app.post("/messages/bulk-status")
-async def bulk_update_message_status(update: BulkStatusUpdate, user: CurrentUser):
-    if update.status not in ("read", "skipped", "unread"):
-        raise HTTPException(status_code=400, detail="Ugyldig status")
-    if not update.ids:
-        return {"ok": True, "count": 0}
-    count = await update_messages_status_bulk(update.ids, update.status, user_id=user["id"])
-    asyncio.create_task(_maybe_update_profile(user["id"]))
-    return {"ok": True, "count": count}
-
 async def _maybe_update_profile(user_id: str):
-    """
-    Regenererer brukerprofilen hver 5. klassifiserte melding (lest eller
-    ikke relevant) – i stedet for kun ved runde 20-tall som før. Gir
-    raskere tilpasning til brukerens preferanser etter manuelle rettinger.
-    """
     try:
         read_ex, skip_ex = await get_classified_messages(user_id=user_id)
-        total = len(read_ex) + len(skip_ex)
-        if total >= 5 and total % 5 == 0:
+        if len(read_ex) + len(skip_ex) >= 20:
             existing = await get_user_profile(user_id=user_id)
             new_profile = await generate_user_profile(read_ex, skip_ex, existing)
             if new_profile and new_profile != existing:
@@ -791,7 +703,6 @@ async def process_all_messages(user: CurrentUser):
 async def _process_all_loop(user_id: str):
     """Kjører AI-scoring i loop til alle meldinger er behandlet."""
     total = 0
-    from users import get_user_settings
     settings = await get_user_settings(user_id)
     api_key = _get_api_key(settings)
     if not api_key:
@@ -806,15 +717,15 @@ async def _process_all_loop(user_id: str):
         user_profile = await get_user_profile(user_id=user_id)
         for msg in unprocessed:
             try:
-                result = await _classify_message(msg, read_examples, skipped_examples, user_profile, user_id, api_key=api_key)
-                await save_ai_result(msg["id"], result["tldr"], result["score"], result["reason"], result["auto_skip"])
+                tldr = await generate_tldr(msg["title"], msg.get("body", ""), msg.get("source_label", ""), user_id=user_id)
+                relevance = await score_relevance(msg, read_examples, skipped_examples, user_profile, user_id=user_id, user_api_key=api_key)
+                await save_ai_result(msg["id"], tldr, relevance["score"], relevance["reason"], relevance["auto_skip"])
                 total += 1
-                logger.info(f"[AI/PROCESS-ALL] [{result['score']}] {msg['title'][:50]}")
+                logger.info(f"[AI/PROCESS-ALL] [{relevance['score']}] {msg['title'][:50]}")
                 await asyncio.sleep(0.3)
             except Exception as e:
                 logger.error(f"[AI/PROCESS-ALL] Feil: {e}")
                 await asyncio.sleep(1)
-        await _maybe_update_profile(user_id)
         await asyncio.sleep(1)
 
 @app.post("/sync")
@@ -871,7 +782,6 @@ async def ingest_messages(
     # Finn første bruker hvis user_id ikke er satt
     resolved_user_id = payload.user_id
     if not resolved_user_id:
-        from database import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
@@ -888,11 +798,9 @@ async def ingest_messages(
                 msg["category"] = group
         # Fiks time_label hvis den er tom eller generisk
         if not msg.get("time") or msg.get("time") in ("nå nettopp", ""):
-            from datetime import timezone
             ts = msg.get("timestamp")
             if ts:
                 try:
-                    from datetime import datetime
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     msg["time"] = dt.strftime("%-d. %b %H:%M")
                 except Exception:
@@ -916,7 +824,6 @@ def _get_api_key(settings: dict) -> str:
 @app.get("/whatsapp/status")
 async def whatsapp_status(user: CurrentUser):
     """Proxy til WhatsApp-tjenesten for å unngå CORS."""
-    from users import get_user_settings
     settings = await get_user_settings(user["id"])
     wa_url = _get_wa_url(settings)
     if not wa_url:
@@ -931,7 +838,6 @@ async def whatsapp_status(user: CurrentUser):
 @app.get("/whatsapp/qr")
 async def whatsapp_qr(user: CurrentUser):
     """Proxy QR-kode fra WhatsApp-tjenesten."""
-    from users import get_user_settings
     settings = await get_user_settings(user["id"])
     wa_url = _get_wa_url(settings)
     if not wa_url:
@@ -943,7 +849,6 @@ async def whatsapp_qr(user: CurrentUser):
 @app.post("/whatsapp/logout")
 async def whatsapp_logout(user: CurrentUser):
     """Logger ut av WhatsApp og sletter sesjonen."""
-    from users import get_user_settings
     settings = await get_user_settings(user["id"])
     wa_url = _get_wa_url(settings)
     if not wa_url:
@@ -968,7 +873,6 @@ async def fix_null_users(user: CurrentUser):
 @app.post("/whatsapp/fetch-history")
 async def whatsapp_fetch_history(user: CurrentUser):
     """Trigger historisk henting fra WhatsApp-tjenesten."""
-    from users import get_user_settings
     settings = await get_user_settings(user["id"])
     wa_url = _get_wa_url(settings)
     if not wa_url:
@@ -984,9 +888,6 @@ class FetchHistoryRequest(BaseModel):
 @app.post("/fetch-history")
 async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
     """Henter historiske meldinger fra alle aktive kilder."""
-    from datetime import datetime, timezone
-    from users import get_user_settings
-
     try:
         from_dt = datetime.fromisoformat(req.from_date).replace(tzinfo=timezone.utc)
     except Exception:
@@ -999,7 +900,6 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
     # ── Spond ──────────────────────────────────────────────────────────────────
     if settings.get("spond_enabled"):
         try:
-            from spond_service import SpondService
             pw = settings.get("spond_password", "")
             if pw and settings.get("spond_username"):
                 svc = SpondService(settings["spond_username"], pw)
@@ -1013,7 +913,6 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
             results["errors"].append(f"Spond: {str(e)}")
 
     # ── E-post (Skolemelding + Showbie) ────────────────────────────────────────
-    from email_service import EmailService
     for idx in [1, 2]:
         enabled = settings.get(f"email_{idx}_enabled")
         host = settings.get(f"email_{idx}_host")
@@ -1048,7 +947,6 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
         wa_url = _get_wa_url(settings)
         if wa_url:
             try:
-                import httpx
                 async with httpx.AsyncClient(timeout=300) as client:
                     res = await client.post(
                         f"{wa_url}/fetch-history",
@@ -1114,7 +1012,6 @@ async def get_api_stats(user: CurrentUser):
 @app.post("/admin/fix-spond-categories")
 async def fix_spond_categories(user: CurrentUser):
     """Oppdaterer category på Spond-meldinger til gruppenavn fra meta."""
-    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute("""
@@ -1130,7 +1027,6 @@ async def fix_spond_categories(user: CurrentUser):
 @app.post("/admin/fix-whatsapp-categories")
 async def fix_whatsapp_categories(user: CurrentUser):
     """Oppdaterer category på WhatsApp-meldinger til gruppenavn fra meta."""
-    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute("""
@@ -1186,7 +1082,6 @@ async def push_unsubscribe(sub: PushSubscription, user: CurrentUser):
 @app.delete("/push/all")
 async def push_unsubscribe_all(user: CurrentUser):
     """Sletter alle push-abonnementer for brukeren."""
-    from database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -1213,11 +1108,6 @@ async def notify_new_messages(user_id: str, new_count: int):
     if new_count <= 0:
         return
     try:
-        settings = await get_user_settings(user_id)
-        # Uavhengig av kveldsvarsel: la bruker skru av "nye meldinger"-varsel
-        # separat, uten at det påvirker eller skjuler kveldsvarsel-innstillingen.
-        if settings and settings.get("new_messages_push_enabled") is False:
-            return
         subs = await get_push_subscriptions(user_id)
         if not subs:
             return
@@ -1238,8 +1128,6 @@ class AiChatRequest(BaseModel):
 
 @app.post("/ai/chat")
 async def ai_chat(req: AiChatRequest, user: CurrentUser):
-    import httpx
-    from users import get_user_settings
     settings = await get_user_settings(user["id"])
     api_key = _get_api_key(settings)
     if not api_key:
@@ -1252,7 +1140,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                  'hva', 'når', 'hvor', 'hvem', 'hvilken', 'noe', 'noen'}
     words = [w.lower().strip('?.,!') for w in req.question.split() if len(w) > 1 and w.lower() not in stopwords]
 
-    from database import get_pool
     import json as _json
     pool = await get_pool()
     seen_ids = set()
@@ -1265,16 +1152,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     date_filter = "AND timestamp > NOW() - INTERVAL '14 days'" if is_time_query else ""
     if is_time_query:
         logger.info(f"[AI/CHAT] Tidsspørsmål – begrenser til siste 14 dager")
-        # Legg til ukenummer som søkeord – ukeplaner fra Showbie heter typisk
-        # "UKE 35 ...pdf", mens spørsmålet ofte kun inneholder datoer. Uten
-        # dette søkeordet blir slike filer ofte ikke funnet.
-        current_week = str(datetime.now().isocalendar()[1])
-        if current_week not in words:
-            words.append(current_week)
-        if any(w in {'neste', 'kommende'} for w in words):
-            next_week = str(datetime.now().isocalendar()[1] + 1)
-            if next_week not in words:
-                words.append(next_week)
 
     if words:
         logger.info(f"[AI/CHAT] Søkeord: {words}")
@@ -1283,6 +1160,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             " time_label AS time, timestamp, priority, status, meta"
             " FROM messages"
             " WHERE user_id = $1"
+            " AND status != 'skipped'"
             f" {date_filter}"
             " AND (LOWER(title) LIKE $2"
             " OR LOWER(tldr) LIKE $2"
@@ -1344,7 +1222,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 
     # Hent kalenderdata hvis aktivert
     calendar_section = ""
-    settings = await get_user_settings(user["id"])
     if settings and settings.get("caldav_enabled") and settings.get("caldav_username") and settings.get("caldav_password"):
         try:
             from caldav_service import fetch_calendar_events, format_events_for_ai
@@ -1363,16 +1240,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger og kalender.\n"
         f"Dagens dato er {today_str}. Bruk denne datoen når du svarer på spørsmål om tid.\n"
         "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
-        "VIKTIG om idrett/lag: Meldinger om fotball, håndball osv. (spesielt fra Spond) nevner ofte KUN "
-        "lagnavnet (f.eks. 'G11 Rød' eller 'G2015 Rød'), ikke hvilket barn det gjelder. Du MÅ da selv "
-        "krysjekke lagnavnet i meldingen mot FAMILIEPROFIL-seksjonen under for å finne riktig barn – "
-        "IKKE gjett. Vær oppmerksom på at lagnavn kan skrives litt ulikt (f.eks. fødselsår vs. aldersklasse). "
-        "Er du usikker på hvilket barn en lagmelding gjelder, si det eksplisitt i svaret i stedet for å anta.\n\n"
-        "VIKTIG om sammenblanding: ALDRI bland informasjon fra to ulike meldinger til én hendelse. "
-        "Attribuer kun detaljer (navn, posisjon, status osv.) til en aktivitet hvis detaljen faktisk STÅR "
-        "I SAMME melding som aktiviteten. Hvis en melding om en kamp ikke selv nevner et barns navn, bruk "
-        "KUN lagnavnet (matchet mot FAMILIEPROFIL) til å identifisere barnet – ikke hent inn et navn eller "
-        "andre detaljer fra en annen melding, selv om den også handler om fotball/samme tema.\n\n"
         "FORMATERING (følg alltid dette, uansett lengde på svar):\n"
         "- Ved oversikter og dagsoversikter: del alltid opp i seksjoner med ### og emoji\n"
         "- Eksempel: ### 🏫 SKOLE:, ### ⚽ FOTBALL:, ### 👤 VOKSNE:, ### 🎯 AKTIVITETER:\n"
@@ -1386,52 +1253,30 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         + msg_context
     )
 
-    # Rens historikken før den sendes til Anthropic. API-et avviser (400) hvis
-    # første melding ikke har rollen 'user', hvis en melding er tom, eller hvis
-    # strukturen er ugyldig. Siden vi bare tar de siste 6 meldingene kan
-    # utsnittet lett starte på en assistent-melding. Frontend sender dessuten
-    # selve spørsmålet som siste historikk-element (uten lengde-instruksjonen);
-    # det fjernes her, siden spørsmålet legges til på nytt nedenfor.
-    cleaned = []
-    for m in req.history[-6:]:
-        role = m.get("role")
-        content = (m.get("content") or "").strip()
-        if role not in ("user", "assistant") or not content or "⏳" in content:
-            continue
-        if cleaned and cleaned[-1]["role"] == role:
-            cleaned[-1]["content"] += "\n\n" + content  # slå sammen like roller
-        else:
-            cleaned.append({"role": role, "content": content})
-    while cleaned and cleaned[0]["role"] != "user":
-        cleaned.pop(0)
-    if cleaned and cleaned[-1]["role"] == "user":
-        cleaned.pop()
-    messages = cleaned + [{"role": "user", "content": req.question}]
+    messages = [
+        m for m in req.history[-6:]
+        if m.get("role") in ("user", "assistant") and "⏳" not in m.get("content", "")
+    ]
+    messages.append({"role": "user", "content": req.question})
 
-    import asyncio as _asyncio
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-4-20250514", "max_tokens": 1200, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
                 logger.warning(f"[AI/CHAT] API overbelastet ({res.status_code}), venter {wait}s...")
-                await _asyncio.sleep(wait)
+                await asyncio.sleep(wait)
                 continue
             if res.status_code != 200:
-                logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:500]}")
-                try:
-                    err_msg = res.json().get("error", {}).get("message", "")
-                except Exception:
-                    err_msg = ""
-                detail = f": {err_msg[:200]}" if err_msg else ""
-                return {"answer": f"Beklager, API-feil ({res.status_code}){detail}. Prøv igjen."}
+                logger.error(f"[AI/CHAT] API feil: {res.status_code} {res.text[:200]}")
+                return {"answer": f"Beklager, API-feil ({res.status_code}). Prøv igjen."}
             data = res.json()
-            answer = extract_text(data.get("content", []))
+            answer = data.get("content", [{}])[0].get("text", "")
             if not answer:
                 logger.error(f"[AI/CHAT] Tomt svar: {data}")
                 return {"answer": "Beklager, fikk tomt svar. Prøv igjen."}
@@ -1448,7 +1293,6 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 
 @app.post("/ai/learn")
 async def ai_learn(req: dict, user: CurrentUser):
-    import httpx
     settings = await get_user_settings(user["id"])
     api_key = _get_api_key(settings)
     if not api_key:
@@ -1461,70 +1305,29 @@ async def ai_learn(req: dict, user: CurrentUser):
             json={
                 "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 150,
-                "system": (
-                    "Trekk ut EN ting fra spørsmålet/svaret: en instruks/preferanse fra BRUKEREN "
-                    "(ikke fra AI-svaret) om HVORDAN du bør svare eller hva du bør prioritere fremover, "
-                    "f.eks. 'Ta alltid med turdager i ukesoppsummeringer'.\n"
-                    "Bruk KUN dette når brukeren tydelig ber om en varig endring i hvordan du svarer – "
-                    "ikke ved vanlige spørsmål.\n"
-                    "IKKE trekk ut fakta om familiemedlemmer, lag eller aktiviteter (f.eks. hvem som "
-                    "spiller på hvilket lag) – slik informasjon vedlikeholdes manuelt av brukeren i "
-                    "Familieprofilen, og skal ALDRI læres automatisk herfra. Er du usikker på om noe er "
-                    "en varig preferanse eller bare et faktum/svar på spørsmålet, svar NULL.\n"
-                    "VIKTIG format-regel: Svar KUN med selve setningen – ingen prefiks som 'Ny personkontekst:', "
-                    "ingen anførselstegn, ingen ** eller ``` markdown, ingen forklaring i parentes.\n"
-                    "Hvis det ikke er noe nytt å huske: svar med ETT ord: NULL. Ikke skriv 'tom streng' eller "
-                    "noen forklaring – bare ordet NULL, ingenting annet.\n"
-                    "Maks 100 tegn."
-                ),
+                "system": "Trekk ut ny personkontekst fra spoersmaal og svar. Returner BARE en kort setning med ny info om person/lag/aktivitet, eller tom streng hvis ingen ny info. Maks 100 tegn. Eksempel: 'Gustav: G2015, Ready Rod, fotball'",
                 "messages": [{"role": "user", "content": f"Sporsmal: {req.get('question','')}\nSvar: {req.get('answer','')}"}]
             }
         )
-    learned = _clean_learned_text(extract_text(res.json().get("content", [])))
+    learned = res.json().get("content", [{}])[0].get("text", "").strip()
     return {"learned": learned}
-
-
-def _clean_learned_text(raw: str) -> str:
-    """
-    Renser Haiku sitt svar fra /ai/learn før det lagres i 'Lært kontekst'.
-    Sikkerhetsnett i tillegg til systemprompt-instruksene, siden Haiku ikke
-    alltid følger formatet nøyaktig (f.eks. skriver forklarende tekst i
-    stedet for en ekte tom streng når det ikke er ny info).
-    """
-    if not raw:
-        return ""
-    t = raw.strip()
-    # Fjern kodeblokk-markører og markdown fet skrift
-    t = re.sub(r'```+', '', t)
-    t = re.sub(r'\*\*', '', t)
-    # Fjern vanlige prefikser modellen noen ganger legger på
-    t = re.sub(r'^(ny\s+personkontekst|personkontekst)\s*:\s*', '', t, flags=re.IGNORECASE)
-    t = t.strip(' \n"\'')
-    # Filtrer bort "ingen ny info"-varianter, uansett hvordan de er formulert
-    if re.match(r'^(null|tom\s+streng|ingen\s+ny)', t, flags=re.IGNORECASE):
-        return ""
-    if not t:
-        return ""
-    return t[:150]
 
 
 # ─── AI historikk ─────────────────────────────────────────────────────────────
 
 @app.get("/ai/history")
 async def get_ai_history(user: CurrentUser):
-    from database import get_pool
+    import json
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT ai_chat_history FROM user_settings WHERE user_id = $1", user["id"]
         )
-    import json
     history = json.loads(row["ai_chat_history"]) if row and row["ai_chat_history"] else []
     return {"history": history}
 
 @app.post("/ai/history")
 async def save_ai_history(payload: dict, user: CurrentUser):
-    from database import get_pool
     import json
     pool = await get_pool()
     async with pool.acquire() as conn:
