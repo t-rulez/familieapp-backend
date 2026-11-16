@@ -10,6 +10,15 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-5"
 
 
+def _extract_text(content_blocks: list) -> str:
+    """Henter ut tekst-blokken fra et Claude-svar. Nyere modeller kan sende en
+    'thinking'-blokk FØRST i content-listen, så vi kan ikke bare ta content[0]."""
+    for block in content_blocks or []:
+        if block.get("type") == "text":
+            return block.get("text", "")
+    return ""
+
+
 async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_key: str = None) -> str:
     """Kaller Claude API med automatisk retry ved overbelastning (529) eller rate limit (429)."""
     import asyncio
@@ -50,7 +59,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_k
                 usage = data.get("usage", {})
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)
-                text = data["content"][0]["text"].strip()
+                text = _extract_text(data.get("content")).strip()
                 return text, tokens_in, tokens_out
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
