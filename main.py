@@ -85,7 +85,18 @@ SPOND_CALENDAR_RULE = (
     "Spond-melding, skal Spond-meldingens lag/kategori og innhold alltid brukes til å avgjøre "
     "hvem aktiviteten gjelder for - ikke anta at den gjelder alle barna bare fordi "
     "kalenderoppføringen ikke nevner noe lag. Bruk familieprofilen under til å vite hvilket "
-    "barn som hører til hvilket lag."
+    "barn som hører til hvilket lag.\n"
+    "Fremgangsmåte for å avgjøre HVEM en Spond-aktivitet gjelder: match alltid lag-/gruppe-"
+    "feltet (kategorien/gruppenavnet til Spond-meldingen, f.eks. 'Minigutt 2017') mot "
+    "familieprofilens lagnavn FØRST, uavhengig av hva selve tittelen på aktiviteten sier. "
+    "Selve aktivitetsteksten/tittelen (f.eks. bare 'Trening' eller 'Kamp') er IKKE pålitelig "
+    "alene for å skille mellom barna, siden den ofte ikke nevner navn eller lag i det hele "
+    "tatt - se derfor alltid på gruppe-/kategorifeltet, ikke bare teksten, før du bestemmer om "
+    "noe gjelder Gustav eller Rasmus. Hvis gruppenavnet ikke finnes i familieprofilen eller er "
+    "tvetydig, si det er usikkert hvem det gjelder fremfor å gjette feil barn.\n"
+    "VIKTIG om klokkeslett: bruk ALLTID klokkeslettet NØYAKTIG som det står i kilden (kalender "
+    "eller Spond) - f.eks. '16:50' skal forbli '16:50', ALDRI rundes av til '17:00' eller annet "
+    "'pent' tidspunkt. Kopier minuttallet ordrett, ikke avrund eller anslå."
 )
 
 # ─── Auth-avhengighet ─────────────────────────────────────────────────────────
