@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 
 import httpx
 
@@ -1384,6 +1384,162 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             logger.error(f"[AI/CHAT] Feil: {e}")
             return {"answer": "Beklager, noe gikk galt. Prøv igjen."}
     return {"answer": "Beklager, noe gikk galt etter 3 forsøk."}
+
+
+# ─── Ukesoversikt (til iPad-visningen) ────────────────────────────────────────
+
+WEEK_PEOPLE = ["Rasmus", "Gustav", "Kristin", "Truls"]
+
+# Enkel per-bruker, per-uke mellomlagring i minnet. Nullstilles automatisk hver
+# mandag (nøkkelen inkluderer mandagsdatoen), og kan tvinges med ?refresh=true.
+_week_cache: dict = {}
+
+@app.get("/ai/week-overview")
+async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset: int = 0):
+    """Strukturert ukesoversikt (mandag-søndag) per familiemedlem, til uke.html på iPad.
+    Bygger på samme kilder som AI-assistenten (meldinger + kalender + familiekontekst),
+    men ber Claude svare med strukturert JSON i stedet for fritekst.
+    week_offset: 0 = denne uken, 1 = neste uke."""
+    if week_offset not in (0, 1):
+        raise HTTPException(status_code=400, detail="week_offset må være 0 eller 1")
+
+    uid = user["id"]
+    today = date.today()
+    monday = today - timedelta(days=today.weekday()) + timedelta(days=7 * week_offset)
+    sunday = monday + timedelta(days=6)
+    cache_key = f"{uid}:{monday.isoformat()}"
+
+    cached = _week_cache.get(cache_key)
+    if not refresh and cached:
+        return cached
+
+    settings = await get_user_settings(uid)
+    api_key = _get_api_key(settings) if settings else os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Claude API-nøkkel er ikke konfigurert")
+
+    family_ctx = settings.get("family_context", "") if settings else ""
+    auto_ctx = settings.get("ai_learned_context", "") if settings else ""
+
+    # Meldinger siste 14 dager – alle, uansett status, slik AI-assistenten ser dem
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT source, source_label, category, title, tldr, body,"
+            " time_label AS time, timestamp"
+            " FROM messages WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '14 days'"
+            " ORDER BY timestamp DESC LIMIT 150",
+            uid
+        )
+
+    def fmt(m):
+        src = m.get("source_label") or m.get("source", "?")
+        parts = [f"[{src} - {m.get('category','')} - {m.get('time','')}] {m.get('title','')}"]
+        if m.get("tldr"):
+            parts.append(f"  Sammendrag: {m['tldr']}")
+        if m.get("body") and m["body"] != m.get("tldr", ""):
+            max_b = 1500 if m.get("source") == "showbie" else 600
+            parts.append(f"  Innhold: {m['body'][:max_b]}")
+        return "\n".join(parts)
+
+    msg_context = ""
+    for row in rows:
+        part = fmt(dict(row))
+        if len(msg_context) + len(part) > 25000:
+            break
+        msg_context += ("\n\n" if msg_context else "") + part
+
+    # Kalender for resten av uken (kan ikke hente bakover i tid)
+    calendar_section = ""
+    if settings and settings.get("caldav_enabled") and settings.get("caldav_username") and settings.get("caldav_password"):
+        try:
+            from caldav_service import fetch_calendar_events, format_events_for_ai
+            days_ahead = max((sunday - today).days + 1, 1)
+            events = await fetch_calendar_events(
+                url=settings.get("caldav_url", "https://caldav.icloud.com"),
+                username=settings.get("caldav_username", ""),
+                password=settings.get("caldav_password", ""),
+                calendar_filter=settings.get("caldav_calendars", ""),
+                days_ahead=days_ahead
+            )
+            calendar_section = f"KALENDER (frem til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
+        except Exception as e:
+            logger.warning(f"[UKESOVERSIKT] Kalender-henting feilet: {e}")
+
+    days_no = ["mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"]
+    day_dates = [monday + timedelta(days=i) for i in range(7)]
+    day_labels = [f"{days_no[i].capitalize()} {d.day}." for i, d in enumerate(day_dates)]
+
+    system = (
+        "Du er en familieassistent som lager en ukesoversikt for en tavle på kjøkkenet.\n"
+        f"Dagens dato er {today.isoformat()}. Uken du skal lage oversikt for er "
+        f"{'denne uken' if week_offset == 0 else 'NESTE uke'}: mandag {day_dates[0].day}. "
+        f"til søndag {day_dates[6].day}.\n"
+        f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
+        f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
+        f"{calendar_section}"
+        f"MELDINGER (siste 14 dager):\n{msg_context}\n\n"
+        "Lag en ukesoversikt fordelt på person og dag, for disse fire personene: "
+        f"{', '.join(WEEK_PEOPLE)} (Rasmus og Gustav er barn, Kristin og Truls er foreldre).\n"
+        "For hver dag mandag-søndag og hver person: list korte stikkord for skolearbeid "
+        "(lekser, prøver, ting som må tas med), fritidsaktiviteter (trening, kamper, møter) "
+        "og andre avtaler. Bruk format 'KL:TID AKTIVITET' når tid er kjent, ellers bare "
+        "aktiviteten. Maks 3 stikkord per celle, hold dem korte (maks ca 25 tegn hver). "
+        "Tom liste hvis ingenting er kjent for personen den dagen. "
+        "IKKE finn på noe som ikke støttes av kildene over.\n\n"
+        "Svar KUN med gyldig JSON, nøyaktig i dette formatet, ingen annen tekst før eller etter:\n"
+        '{"days": [\n'
+        '  {"day": "mandag", "people": {"Rasmus": ["..."], "Gustav": ["..."], '
+        '"Kristin": ["..."], "Truls": ["..."]}},\n'
+        '  ...\n'
+        "]} (nøyaktig 7 dager totalt, i rekkefølge mandag til søndag)"
+    )
+
+    import json
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-sonnet-5", "max_tokens": 2000,
+                  "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
+        )
+    if resp.status_code != 200:
+        logger.error(f"[UKESOVERSIKT] API feil: {resp.status_code} {resp.text[:200]}")
+        raise HTTPException(status_code=502, detail="Klarte ikke å hente ukesoversikt (API-feil)")
+
+    raw = _extract_text(resp.json().get("content"))
+    try:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        parsed = json.loads(raw[start:end])
+    except Exception as e:
+        logger.error(f"[UKESOVERSIKT] Klarte ikke å tolke JSON-svar: {e} – raw: {raw[:300]}")
+        raise HTTPException(status_code=502, detail="Klarte ikke å tolke svaret fra AI-en")
+
+    parsed_days = parsed.get("days", []) if isinstance(parsed, dict) else []
+    result_days = []
+    for i, d in enumerate(day_dates):
+        day_data = parsed_days[i] if i < len(parsed_days) and isinstance(parsed_days[i], dict) else {}
+        people = day_data.get("people", {}) if isinstance(day_data.get("people"), dict) else {}
+        result_days.append({
+            "day": days_no[i],
+            "label": day_labels[i],
+            "date": d.isoformat(),
+            "is_today": d == today,
+            "people": {p: people.get(p, []) if isinstance(people.get(p), list) else [] for p in WEEK_PEOPLE}
+        })
+
+    data = {
+        "week_start": monday.isoformat(),
+        "week_end": sunday.isoformat(),
+        "week_offset": week_offset,
+        "people": WEEK_PEOPLE,
+        "days": result_days,
+        "generated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    _week_cache[cache_key] = data
+    return data
 
 
 @app.post("/ai/learn")
