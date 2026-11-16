@@ -18,8 +18,25 @@ den gjetter aldri. Det er et bevisst valg: heller ingen match enn feil barn.
 """
 import re
 
-_HEADER_RE = re.compile(r'^\**([A-ZÆØÅ][\wæøåÆØÅ]*)\**\s*:', re.MULTILINE)
-_QUOTED_RE = re.compile(r'[«"]([^»"]+)[»"]')
+# En persons seksjon starter KUN med en linje skrevet i fet skrift: "**Navn**:"
+# (f.eks. "**Gustav**:" eller "**Kristin Dahle**:"). Dette er et eksplisitt,
+# strukturelt signal brukeren selv setter - ingen gjetting basert på ord. Uten fet
+# skrift blir en linje som "Fotball: Ready G2015 Rød" ALDRI tolket som en ny persons
+# overskrift, uansett hva den heter - den blir automatisk et punkt UNDER personen
+# over, siden den ikke matcher dette mønsteret.
+_HEADER_RE = re.compile(r'^\*\*([^*\n]+)\*\*\s*:', re.MULTILINE)
+# Godtar rette anførselstegn ("..."), buede/"smarte" anførselstegn (“...” eller „...“)
+# og anførselstegn (« ... »), siden tekstbehandlere ofte bytter rette til buede
+# automatisk når man skriver eller limer inn tekst.
+_QUOTED_RE = re.compile(r'[«"“„]([^»"”“]+)[»"”]')
+
+
+# Fjerner "IKKE ..."-setninger (f.eks. "IKKE 'Minigutt 2017' eller 'G17' - det er
+# Rasmus sitt lag.") før vi plukker ut anførselstegn-navn - uten dette ville et
+# lagnavn som nevnes for å utelukke det (fordi det tilhører SØSKENET) feilaktig blitt
+# lagt til som om det var personens eget lagnavn, og gjort matchingen tvetydig for
+# begge barna.
+_EXCLUSION_RE = re.compile(r'\bIKKE\b[^.]*\.?', re.IGNORECASE)
 
 
 def extract_child_team_names(family_context: str) -> dict[str, list[str]]:
@@ -32,7 +49,7 @@ def extract_child_team_names(family_context: str) -> dict[str, list[str]]:
         name = h.group(1)
         start = h.end()
         end = headers[i + 1].start() if i + 1 < len(headers) else len(family_context)
-        section = family_context[start:end]
+        section = _EXCLUSION_RE.sub(' ', family_context[start:end])
         names = _QUOTED_RE.findall(section)
         if names:
             result.setdefault(name, [])
