@@ -850,6 +850,51 @@ async def ingest_messages(
     return {"ok": True, "count": len(payload.messages)}
 
 
+# ─── WhatsApp-tilkobling: varsle ved frakobling ──────────────────────────────
+
+class WaStatusPayload(BaseModel):
+    event: str  # "disconnected" | "logged_out" | "reconnected"
+    detail: str = ""
+
+@app.post("/integrations/whatsapp/status")
+async def whatsapp_status(
+    payload: WaStatusPayload,
+    x_api_token: Optional[str] = Header(None)
+):
+    """Kalles av whatsapp-service når tilkoblingen faller ut, logges ut, eller kommer tilbake.
+    Sender push-varsel til alle brukere som har et aktivt push-abonnement."""
+    expected = os.environ.get("API_TOKEN")
+    if expected and x_api_token != expected:
+        raise HTTPException(status_code=401, detail="Ugyldig token")
+
+    if payload.event == "logged_out":
+        title = "⚠️ WhatsApp logget ut"
+        body = "Må skannes på nytt i appen for å fortsette å motta meldinger"
+    elif payload.event == "disconnected":
+        title = "⚠️ WhatsApp koblet fra"
+        body = f"Har ikke klart å koble til på en stund ({payload.detail})" if payload.detail else "Har ikke klart å koble til på en stund"
+    elif payload.event == "reconnected":
+        title = "✓ WhatsApp tilkoblet igjen"
+        body = "Alt er i orden igjen"
+    else:
+        logger.warning(f"Ukjent WhatsApp-statushendelse: {payload.event}")
+        return {"ok": True}
+
+    try:
+        users = await get_all_active_users()
+        sent = 0
+        for u in users:
+            subs = await get_push_subscriptions(str(u["id"]))
+            if subs:
+                await send_push_to_user(subs, title, body, "whatsapp-status")
+                sent += len(subs)
+        logger.info(f"[WHATSAPP-STATUS] {payload.event} – varslet {sent} enhet(er)")
+    except Exception as e:
+        logger.error(f"Kunne ikke sende WhatsApp-statusvarsel: {e}")
+
+    return {"ok": True}
+
+
 # ─── WhatsApp proxy ──────────────────────────────────────────────────────────
 
 def _get_wa_url(settings: dict) -> str:
