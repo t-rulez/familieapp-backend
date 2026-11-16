@@ -5,8 +5,6 @@ from datetime import datetime, timezone
 from typing import Optional
 import httpx
 
-from ai_service import extract_text
-
 logger = logging.getLogger(__name__)
 
 SHOWBIE_HEADERS = {
@@ -22,6 +20,14 @@ SHOWBIE_HEADERS = {
 
 DAYS_NO = ["mandag","tirsdag","onsdag","torsdag","fredag","lørdag","søndag"]
 MONTHS_NO = ["januar","februar","mars","april","mai","juni","juli","august","september","oktober","november","desember"]
+
+# Kjente barn-IDer -> navn, slik at Showbie-meldinger kan merkes eksplisitt med hvilket
+# barn de gjelder (klassenavn alene, f.eks. "6C", sier ikke AI-en hvem det er for - den
+# måtte før gjette ut fra familieprofilen).
+CHILD_NAMES = {
+    "1b6de9d15b7ea17ad96bd67610a193b456e5e910": "Gustav",
+    "8186e69cd1b50811eb8d64c5e019cfe21a4512b0": "Rasmus",
+}
 
 
 class ShowbieService:
@@ -54,6 +60,7 @@ class ShowbieService:
             logger.info(f"[SHOWBIE] Fant {len(classes)} klasser")
 
             for child_id in self.child_ids:
+                child_name = CHILD_NAMES.get(child_id, "")
                 assignments = await self._get_child_assignments(client, child_id)
                 logger.info(f"[SHOWBIE] Barn {child_id[:8]}: {len(assignments)} assignments")
 
@@ -103,12 +110,12 @@ class ShowbieService:
                                 # Tekstkommentar – hent avsendernavn
                                 sender = post.get("authorName") or post.get("author", {}).get("displayName", "") if isinstance(post.get("author"), dict) else ""
                                 msg = await self._normalize_comment(
-                                    post, aname, assignment["_group_name"], folder_name, sender
+                                    post, aname, assignment["_group_name"], folder_name, sender, child_name
                                 )
                             else:
                                 # Fil/PDF/bilde
                                 msg = await self._normalize_post(
-                                    client, post, aname, assignment["_group_name"], folder_name, due
+                                    client, post, aname, assignment["_group_name"], folder_name, due, child_name
                                 )
 
                             if msg:
@@ -295,7 +302,7 @@ class ShowbieService:
 
     async def _normalize_comment(
         self, post: dict, assignment_name: str,
-        group_name: str, folder_name: str, sender_name: str
+        group_name: str, folder_name: str, sender_name: str, child_name: str = ""
     ) -> Optional[dict]:
         """Normaliserer en tekstkommentar fra Showbie."""
         try:
@@ -321,7 +328,13 @@ class ShowbieService:
             title = f"{assignment_name}: {sender_name}" if sender_name else assignment_name
             tldr = clean[:120] + ("..." if len(clean) > 120 else "")
 
+            # Kategori merkes eksplisitt med barnets navn (ikke bare klassenavn som "6C"),
+            # slik at AI-en vet hvem meldingen gjelder uten å måtte gjette via familieprofilen.
+            category = f"{child_name} {group_name}".strip() if child_name else group_name
+
             body = f"Fra: {sender_name}\nOppgave: {assignment_name}\nKlasse: {group_name}"
+            if child_name:
+                body = f"Gjelder: {child_name}\n" + body
             if folder_name:
                 body += f"\nMappe: {folder_name}"
             body += f"\n\n{clean}"
@@ -330,7 +343,7 @@ class ShowbieService:
                 "id": post_id,
                 "source": "showbie",
                 "sourceLabel": "Showbie",
-                "category": group_name,
+                "category": category,
                 "title": title,
                 "tldr": tldr,
                 "body": body,
@@ -343,6 +356,7 @@ class ShowbieService:
                     "folder": folder_name,
                     "group": group_name,
                     "sender": sender_name,
+                    "child": child_name,
                 }
             }
         except Exception as e:
@@ -351,7 +365,7 @@ class ShowbieService:
 
     async def _normalize_post(
         self, client, post: dict, assignment_name: str,
-        group_name: str, folder_name: str, due_date
+        group_name: str, folder_name: str, due_date, child_name: str = ""
     ) -> Optional[dict]:
         try:
             file_name = post.get("name", "")
@@ -376,7 +390,11 @@ class ShowbieService:
             if not file_name and not content_text:
                 return None
 
+            category = f"{child_name} {group_name}".strip() if child_name else group_name
+
             body = f"Fil: {file_name}\nOppgave: {assignment_name}\nKlasse: {group_name}"
+            if child_name:
+                body = f"Gjelder: {child_name}\n" + body
             if folder_name:
                 body += f"\nMappe: {folder_name}"
             if content_text:
@@ -389,7 +407,7 @@ class ShowbieService:
                 "id": post_id,
                 "source": "showbie",
                 "sourceLabel": "Showbie",
-                "category": group_name,
+                "category": category,
                 "title": title,
                 "tldr": tldr,
                 "body": body,
@@ -402,6 +420,7 @@ class ShowbieService:
                     "file": file_name,
                     "folder": folder_name,
                     "group": group_name,
+                    "child": child_name,
                 }
             }
         except Exception as e:
@@ -443,6 +462,9 @@ class ShowbieService:
             })
 
             # Send til Claude Vision
+            # Modellen var tidligere "claude-sonnet-4-20250514" (pensjonert -> 404 model_not_found),
+            # som gjorde at Vision-tolkningen av PDF/bilde (f.eks. selve ukeplanen) feilet stille
+            # og falt tilbake til tom tekst, uten at ukeplanens faktiske innhold noen gang kom med.
             async with httpx.AsyncClient(timeout=60) as ai_client:
                 res = await ai_client.post(
                     "https://api.anthropic.com/v1/messages",
@@ -470,7 +492,10 @@ class ShowbieService:
                             )
                         except Exception:
                             pass
-                    return extract_text(data.get("content", []))
+                    from ai_service import _extract_text
+                    return _extract_text(data.get("content"))
+                else:
+                    logger.error(f"[SHOWBIE] Vision API feil ved tolkning av '{file_name}': {res.status_code} {res.text[:200]}")
         except Exception as e:
             logger.error(f"Claude Vision feilet: {e}")
         return ""

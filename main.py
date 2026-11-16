@@ -1515,12 +1515,15 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         f"MELDINGER (siste 14 dager):\n{msg_context}\n\n"
         "Lag en ukesoversikt fordelt på person og dag, for disse fire personene: "
         f"{', '.join(WEEK_PEOPLE)} (Gustav og Rasmus er barn, Kristin og Truls er foreldre).\n"
-        "For hver dag mandag-søndag og hver person: list korte stikkord for skolearbeid "
-        "(lekser, prøver, innleveringer, ting som må tas med) og spesielle skoleaktiviteter "
-        "(turdag, tema-/aktivitetsdag, skolearrangement, foreldremøte, utflukt o.l. - typisk "
-        "fra Showbie eller skolemelding), fritidsaktiviteter (trening, kamper, møter) og andre "
-        "avtaler. Skoleinnhold er like viktig som resten og skal alltid tas med når det finnes "
-        "i kildene - ikke bare idrett/fritid.\n"
+        "For hver dag mandag-søndag og hver person skal du dele stikkordene i to grupper:\n"
+        "1) \"skole\": ALT som gjelder skolearbeid og skole - lekser, prøver, innleveringer, "
+        "ting som må tas med, turdag, tema-/aktivitetsdag, skolearrangement, foreldremøte, "
+        "utflukt og lignende. Dette er typisk fra Showbie eller skolemelding (kategori/tittel "
+        "kan inneholde klassenavn som '6C' eller '7B', eller barnets navn direkte - bruk det "
+        "til å vite hvem det gjelder for). Vær like grundig her som du ville vært hvis noen "
+        "spurte deg direkte om 'skoleuke' - IKKE utelat skoleinnhold som finnes i kildene.\n"
+        "2) \"annet\": fritidsaktiviteter (trening, kamper, møter) og andre avtaler - alt som "
+        "ikke er skolerelatert.\n"
         "Format på hvert stikkord: '<emoji> <HH:MM> <aktivitet>' når tidspunkt er kjent "
         "(24-timers format med kolon, f.eks. '18:00'), ellers '<emoji> <aktivitet>' uten tid. "
         "Velg selv ett emoji som passer aktiviteten (f.eks. ⚽🏒🤾🎿📓📝💉🎉🍷👔🎂), ett emoji per stikkord. "
@@ -1538,10 +1541,14 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "IKKE finn på noe som ikke støttes av kildene over.\n\n"
         "Svar KUN med gyldig JSON, nøyaktig i dette formatet, ingen annen tekst før eller etter:\n"
         '{"days": [\n'
-        '  {"day": "mandag", "people": {"Gustav": ["..."], "Rasmus": ["..."], '
-        '"Kristin": ["..."], "Truls": ["..."]}},\n'
+        '  {"day": "mandag", "people": {'
+        '"Gustav": {"skole": ["..."], "annet": ["..."]}, '
+        '"Rasmus": {"skole": ["..."], "annet": ["..."]}, '
+        '"Kristin": {"skole": ["..."], "annet": ["..."]}, '
+        '"Truls": {"skole": ["..."], "annet": ["..."]}}},\n'
         '  ...\n'
-        "]} (nøyaktig 7 dager totalt, i rekkefølge mandag til søndag)"
+        "]} (nøyaktig 7 dager totalt, i rekkefølge mandag til søndag - skole og annet er "
+        "tomme lister [] hvis ingenting er kjent)"
     )
 
     import json
@@ -1583,22 +1590,40 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         logger.error(f"[UKESOVERSIKT] Klarte ikke å tolke JSON-svar: {e} – raw: {raw[:300]}")
         raise HTTPException(status_code=502, detail="Klarte ikke å tolke svaret fra AI-en")
 
+    def _str_list(v):
+        return v if isinstance(v, list) else []
+
     parsed_days = parsed.get("days", []) if isinstance(parsed, dict) else []
     result_days = []
     for i, d in enumerate(day_dates):
         day_data = parsed_days[i] if i < len(parsed_days) and isinstance(parsed_days[i], dict) else {}
         people = day_data.get("people", {}) if isinstance(day_data.get("people"), dict) else {}
+        day_people = {}
+        for p in WEEK_PEOPLE:
+            entry = people.get(p)
+            if isinstance(entry, dict):
+                day_people[p] = {
+                    "skole": _str_list(entry.get("skole")),
+                    "annet": _str_list(entry.get("annet")),
+                }
+            elif isinstance(entry, list):
+                # Fallback hvis AI-en skulle svare med gammelt flatt listeformat
+                day_people[p] = {"skole": [], "annet": entry}
+            else:
+                day_people[p] = {"skole": [], "annet": []}
         result_days.append({
             "day": days_no[i],
             "label": day_labels[i],
             "date": d.isoformat(),
             "is_today": d == today,
-            "people": {p: people.get(p, []) if isinstance(people.get(p), list) else [] for p in WEEK_PEOPLE}
+            "people": day_people
         })
 
+    week_number = monday.isocalendar()[1]
     data = {
         "week_start": monday.isoformat(),
         "week_end": sunday.isoformat(),
+        "week_number": week_number,
         "week_offset": week_offset,
         "people": WEEK_PEOPLE,
         "days": result_days,
