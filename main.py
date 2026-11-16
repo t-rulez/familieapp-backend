@@ -1463,7 +1463,12 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         if m.get("tldr"):
             parts.append(f"  Sammendrag: {m['tldr']}")
         if m.get("body") and m["body"] != m.get("tldr", ""):
-            max_b = 1500 if m.get("source") == "showbie" else 600
+            # Var 1500 for showbie - kuttet av midt i en vanlig ukeplan, rett FØR
+            # "Lekser"-delen (den viktigste delen!), siden selve timeplanen for 5
+            # dager alene fort passerer 1500 tegn. Økt til 2500 - mer enn de andre
+            # to AI-endepunktene (2000) bruker, siden ukesoversikten trenger mest
+            # detalj for å klare å dele opp en hel ukeplan per dag.
+            max_b = 2500 if m.get("source") == "showbie" else 600
             parts.append(f"  Innhold: {m['body'][:max_b]}")
         return "\n".join(parts)
 
@@ -1521,7 +1526,12 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "utflukt og lignende. Dette er typisk fra Showbie eller skolemelding (kategori/tittel "
         "kan inneholde klassenavn som '6C' eller '7B', eller barnets navn direkte - bruk det "
         "til å vite hvem det gjelder for). Vær like grundig her som du ville vært hvis noen "
-        "spurte deg direkte om 'skoleuke' - IKKE utelat skoleinnhold som finnes i kildene.\n"
+        "spurte deg direkte om 'skoleuke' - IKKE utelat skoleinnhold som finnes i kildene. "
+        "En Showbie-ukeplan inneholder ofte både en daglig timeplan (skolefag/timer - denne "
+        "skal IKKE gjentas dag for dag i oversikten, det er for mye detalj) og en lekse-del "
+        "som gjelder HELE uken (f.eks. 'les 30 min i løpet av uken' eller 'gjør X hver dag', "
+        "uten noen bestemt dag). Slike ukeleksjer skal alltid tas med - legg dem under mandag "
+        "denne uken, som egne stikkord.\n"
         "2) \"annet\": fritidsaktiviteter (trening, kamper, møter) og andre avtaler - alt som "
         "ikke er skolerelatert.\n"
         "Format på hvert stikkord: '<emoji> <HH:MM> <aktivitet>' når tidspunkt er kjent "
