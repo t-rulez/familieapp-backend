@@ -71,6 +71,20 @@ logger = logging.getLogger(__name__)
 
 last_sync: Optional[str] = None
 
+# Delt regel brukt i alle AI-prompter (ukesoversikt, AI-assistent, kveldssammendrag):
+# kalenderen inneholder ofte en generisk kopi av Spond-aktiviteter uten lagnavn.
+# Spond-meldingen selv VET hvilket lag/barn det gjelder, og skal derfor overstyre.
+SPOND_CALENDAR_RULE = (
+    "VIKTIG REGEL om kalender vs. Spond: Felles-kalenderen inneholder noen ganger kopier av "
+    "aktiviteter som opprinnelig kommer fra Spond (idrettslag/foreldregrupper). Kalenderkopien "
+    "er ofte generisk og mangler informasjon om hvilket lag eller barn aktiviteten faktisk "
+    "gjelder. Når samme aktivitet (samme type/tidspunkt) finnes BÅDE i kalenderen og som en "
+    "Spond-melding, skal Spond-meldingens lag/kategori og innhold alltid brukes til å avgjøre "
+    "hvem aktiviteten gjelder for - ikke anta at den gjelder alle barna bare fordi "
+    "kalenderoppføringen ikke nevner noe lag. Bruk familieprofilen under til å vite hvilket "
+    "barn som hører til hvilket lag."
+)
+
 # ─── Auth-avhengighet ─────────────────────────────────────────────────────────
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
@@ -407,6 +421,7 @@ async def send_evening_summary(user: dict):
     system = (
         f"Du er en familieassistent som gir daglige oversikter.\n"
         f"Dagens dato er {today_str}. I morgen er det {tomorrow_str}.\n"
+        f"{SPOND_CALENDAR_RULE}\n\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"{calendar_section}"
@@ -1341,6 +1356,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
         f"Du er en hjelpsom familieassistent som hjelper med å finne informasjon fra familiens meldinger og kalender.\n"
         f"Dagens dato er {today_str}. Bruk denne datoen når du svarer på spørsmål om tid.\n"
         "Svar alltid på norsk. Vaer konkret og presis. Hvis du ikke finner svaret, si det tydelig. Ikke finn opp informasjon.\n\n"
+        f"{SPOND_CALENDAR_RULE}\n\n"
         "FORMATERING (følg alltid dette, uansett lengde på svar):\n"
         "- Ved oversikter og dagsoversikter: del alltid opp i seksjoner med ### og emoji\n"
         "- Eksempel: ### 🏫 SKOLE:, ### ⚽ FOTBALL:, ### 👤 VOKSNE:, ### 🎯 AKTIVITETER:\n"
@@ -1394,7 +1410,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 
 # ─── Ukesoversikt (til iPad-visningen) ────────────────────────────────────────
 
-WEEK_PEOPLE = ["Rasmus", "Gustav", "Kristin", "Truls"]
+WEEK_PEOPLE = ["Gustav", "Rasmus", "Kristin", "Truls"]
 
 # Enkel per-bruker, per-uke mellomlagring i minnet. Nullstilles automatisk hver
 # mandag (nøkkelen inkluderer mandagsdatoen), og kan tvinges med ?refresh=true.
@@ -1481,21 +1497,27 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         f"Dagens dato er {today.isoformat()}. Uken du skal lage oversikt for er "
         f"{'denne uken' if week_offset == 0 else 'NESTE uke'}: mandag {day_dates[0].day}. "
         f"til søndag {day_dates[6].day}.\n"
+        f"{SPOND_CALENDAR_RULE}\n\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"{calendar_section}"
         f"MELDINGER (siste 14 dager):\n{msg_context}\n\n"
         "Lag en ukesoversikt fordelt på person og dag, for disse fire personene: "
-        f"{', '.join(WEEK_PEOPLE)} (Rasmus og Gustav er barn, Kristin og Truls er foreldre).\n"
+        f"{', '.join(WEEK_PEOPLE)} (Gustav og Rasmus er barn, Kristin og Truls er foreldre).\n"
         "For hver dag mandag-søndag og hver person: list korte stikkord for skolearbeid "
         "(lekser, prøver, ting som må tas med), fritidsaktiviteter (trening, kamper, møter) "
-        "og andre avtaler. Bruk format 'KL:TID AKTIVITET' når tid er kjent, ellers bare "
-        "aktiviteten. Maks 3 stikkord per celle, hold dem korte (maks ca 25 tegn hver). "
-        "Tom liste hvis ingenting er kjent for personen den dagen. "
+        "og andre avtaler.\n"
+        "Format på hvert stikkord: '<emoji> <HH:MM> <aktivitet>' når tidspunkt er kjent "
+        "(24-timers format med kolon, f.eks. '18:00'), ellers '<emoji> <aktivitet>' uten tid. "
+        "Velg selv ett emoji som passer aktiviteten (f.eks. ⚽🏒🤾🎿📓📝💉🎉🍷👔🎂), ett emoji per stikkord. "
+        "Maks 3 stikkord per celle. Behold navn, stedsnavn og andre konkrete detaljer fra "
+        "kilden (f.eks. hvem et arrangement er sammen med) - ikke generaliser eller forkort "
+        "bort slikt, men hold selve setningen kort og uten fyllord (maks ca 40 tegn inkl. emoji "
+        "og tid). Tom liste hvis ingenting er kjent for personen den dagen. "
         "IKKE finn på noe som ikke støttes av kildene over.\n\n"
         "Svar KUN med gyldig JSON, nøyaktig i dette formatet, ingen annen tekst før eller etter:\n"
         '{"days": [\n'
-        '  {"day": "mandag", "people": {"Rasmus": ["..."], "Gustav": ["..."], '
+        '  {"day": "mandag", "people": {"Gustav": ["..."], "Rasmus": ["..."], '
         '"Kristin": ["..."], "Truls": ["..."]}},\n'
         '  ...\n'
         "]} (nøyaktig 7 dager totalt, i rekkefølge mandag til søndag)"
