@@ -7,22 +7,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-5"
-
-
-def extract_text(content: list) -> str:
-    """
-    Henter tekst-innholdet fra en Claude API-respons sin content-liste.
-    Sonnet 5 har adaptive thinking alltid på, så svaret kan starte med en
-    'thinking'-blokk før selve teksten. Denne funksjonen finner riktig
-    'text'-blokk uansett rekkefølge, i stedet for å anta content[0].
-    """
-    if not content:
-        return ""
-    for block in content:
-        if block.get("type") == "text":
-            return block.get("text", "")
-    return ""
+MODEL = "claude-sonnet-4-20250514"
 
 
 async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_key: str = None) -> str:
@@ -65,7 +50,7 @@ async def _call_claude(system: str, user: str, max_tokens: int = 500, user_api_k
                 usage = data.get("usage", {})
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)
-                text = extract_text(data.get("content", [])).strip()
+                text = data["content"][0]["text"].strip()
                 return text, tokens_in, tokens_out
 
         except (httpx.TimeoutException, httpx.ConnectError) as e:
@@ -87,8 +72,8 @@ async def generate_tldr(title: str, body: str, source_label: str, user_id: str =
         return body[:150]
 
     try:
-        system = """Du er en assistent som hjelper travle foreldre med å holde oversikt over 
-meldinger fra skole, idrettslag og foreldregrupper. 
+        system = """Du er en assistent som hjelper travle foreldre med å holde oversikt over
+meldinger fra skole, idrettslag og foreldregrupper.
 Skriv alltid på norsk. Vær kortfattet og konkret."""
 
         user = f"""Oppsummer denne meldingen i 1-2 setninger (maks 120 tegn).
@@ -121,7 +106,7 @@ async def score_relevance(
 ) -> dict:
     """
     Vurderer relevansen av en melding basert på brukerens tidligere valg.
-    
+
     Returnerer:
         {
             "score": "high" | "medium" | "low",
@@ -135,23 +120,23 @@ async def score_relevance(
         return {"score": "medium", "auto_skip": False, "reason": "For lite data til å vurdere"}
 
     try:
-        system = """Du er et filtreringssystem for en familie-app som samler meldinger fra 
-skole, idrettslag og foreldregrupper. Din jobb er å vurdere om en melding er 
-relevant for denne spesifikke brukeren basert på deres tidligere valg.
+        system = """Du er et strengt filtreringssystem for en familie-app som samler meldinger fra
+skole, idrettslag og foreldregrupper. Brukeren vil bare se meldinger som krever
+handling eller endrer planene for familien. Alt annet skal sorteres bort.
 
 Svar ALLTID med gyldig JSON og ingenting annet."""
 
-        # Bygg eksempel-seksjoner (økt fra 15 til 30 for bedre mønstergjenkjenning)
+        # Bygg eksempel-seksjoner
         read_section = ""
         if read_examples:
-            examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}" 
-                       for m in read_examples[:30]]
+            examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}"
+                       for m in read_examples[:15]]
             read_section = "MELDINGER BRUKEREN HAR LEST (interessant):\n" + "\n".join(examples)
 
         skip_section = ""
         if skipped_examples:
-            examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}" 
-                       for m in skipped_examples[:30]]
+            examples = [f"- [{m['source_label']}] {m['title']}: {m['tldr']}"
+                       for m in skipped_examples[:15]]
             skip_section = "MELDINGER BRUKEREN HAR IGNORERT (ikke relevant):\n" + "\n".join(examples)
 
         profile_section = ""
@@ -170,7 +155,7 @@ Kategori: {message.get('category', '')}
 Tittel: {message.get('title', '')}
 Innhold: {message.get('tldr', '')}
 
-Vurder om denne meldingen sannsynligvis er relevant for brukeren.
+Vurder om denne meldingen krever at brukeren gjør noe eller endrer planer.
 
 Svar med JSON i dette formatet:
 {{
@@ -179,13 +164,19 @@ Svar med JSON i dette formatet:
   "reason": "kort forklaring på norsk (maks 80 tegn)"
 }}
 
-Regler:
-- "high": tydelig relevant – angår direkte denne familien (barnets navn, spesifikk aktivitet, viktig beskjed)
-- "medium": kan være relevant, men usikkert
-- "low": generell diskusjon, informasjon til mange, ikke spesifikt for denne familien
-- auto_skip: sett true hvis "low" score OG meldingen er generell diskusjon, avstemning, eller masseutsendelse uten spesifikk info
-- Vær STRENG: generelle diskusjoner i foreldregrupper, "hvem kan kjøre?" og lignende koordineringsmeldinger uten svar = low + auto_skip
-- Viktige beskjeder om tid/sted/påmelding = medium eller high selv om de er brede"""
+Regler (vær STRENG – er du i tvil, sett auto_skip = true):
+- "high": krever handling eller endrer planer for denne familien – avlysning, endret tid/sted,
+  frist, påmelding, betaling, noe som må tas med, prøve/lekse, eller barnet nevnes ved navn.
+  auto_skip = false.
+- "medium": inneholder konkret dato/tid/sted for noe familien sannsynligvis deltar på,
+  men krever ingen handling nå. auto_skip = true med mindre det gjelder i dag, i morgen
+  eller er en endring fra tidligere plan.
+- "low": alt annet. auto_skip = true. Dette gjelder blant annet:
+  * prat og koordinering i foreldregrupper («hvem kan kjøre?», «takk!», «så fint», emoji, svar på andres spørsmål)
+  * generelle nyhetsbrev, ukeskriv og påminnelser uten nytt innhold
+  * bekreftelser, kvitteringer og rutinemeldinger
+  * informasjon til mange som ikke spesifikt angår denne familien
+- Rene svar, takk og småprat er ALLTID low + auto_skip, uansett avsender."""
 
         response, tokens_in, tokens_out = await _call_claude(system, user_prompt, max_tokens=200, user_api_key=user_api_key)
 
@@ -201,9 +192,17 @@ Regler:
                     await log_api_usage(user_id, message.get("source","unknown"), "scoring", tokens_in, tokens_out)
                 except Exception:
                     pass
+            score = result.get("score", "medium")
+            auto_skip = bool(result.get("auto_skip", False))
+            # Håndhev streng regel i koden: "low" sorteres alltid bort
+            if score == "low":
+                auto_skip = True
+            # "high" skal aldri sorteres bort
+            if score == "high":
+                auto_skip = False
             return {
-                "score": result.get("score", "medium"),
-                "auto_skip": result.get("auto_skip", False),
+                "score": score,
+                "auto_skip": auto_skip,
                 "reason": result.get("reason", "")
             }
 
@@ -220,14 +219,14 @@ async def generate_user_profile(
 ) -> str | None:
     """
     Genererer/oppdaterer en tekstlig brukerprofil basert på klassifiseringer.
-    Kjøres når brukeren har gjort nok valg (5+).
+    Kjøres når brukeren har gjort nok valg (20+).
     """
     total = len(read_examples) + len(skipped_examples)
-    if total < 5:
+    if total < 20:
         return existing_profile
 
     try:
-        system = """Du lager korte brukerprofiler for et filtreringssystem. 
+        system = """Du lager korte brukerprofiler for et filtreringssystem.
 Skriv på norsk. Vær konkret og presis."""
 
         read_list = [f"- [{m['source_label']}] {m['title']}" for m in read_examples[:25]]
@@ -235,7 +234,7 @@ Skriv på norsk. Vær konkret og presis."""
 
         existing = f"\nEksisterende profil (oppdater denne):\n{existing_profile}" if existing_profile else ""
 
-        user_prompt = f"""Basert på disse meldingene en bruker har klassifisert, lag en kort profil 
+        user_prompt = f"""Basert på disse meldingene en bruker har klassifisert, lag en kort profil
 (maks 200 tegn) som beskriver hva brukeren bryr seg om og ikke.{existing}
 
 LEST (interessant):

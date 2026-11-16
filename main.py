@@ -36,7 +36,7 @@ from database import (
     get_stats, get_classified_messages, get_user_profile,
     save_user_profile, save_ai_result, get_unprocessed_messages,
     save_push_subscription, delete_push_subscription, get_push_subscriptions,
-    count_unread_messages
+    count_unread_messages, skip_unprocessed_messages
 )
 from push_service import send_push_to_user
 from users import (
@@ -72,7 +72,22 @@ CurrentUser = Annotated[dict, Depends(get_current_user)]
 
 # ─── AI-behandling ────────────────────────────────────────────────────────────
 
+async def _scoring_enabled(user_id: str) -> bool:
+    """Er AI-scoring skrudd på for denne brukeren? (på som standard)"""
+    try:
+        settings = await get_user_settings(user_id) or {}
+        return settings.get("ai_scoring_enabled") is not False
+    except Exception:
+        return True
+
+
 async def run_ai_processing(user_id: str):
+    # AI-scoring av: arkiver nye meldinger som «Ikke relevant» uten å kalle Claude
+    if not await _scoring_enabled(user_id):
+        n = await skip_unprocessed_messages(user_id)
+        if n:
+            logger.info(f"[AI] Scoring av – {n} nye meldinger arkivert som ikke relevant")
+        return
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return
     unprocessed = await get_unprocessed_messages(limit=20, user_id=user_id)
@@ -315,7 +330,7 @@ async def send_evening_summary(user: dict):
         "SELECT id, source, source_label, category, title, tldr, body,"
         " time_label AS time, timestamp, priority, status, meta"
         " FROM messages WHERE user_id = $1"
-        " AND status != 'skipped'"
+        # Tar med alle meldinger, også de som er markert som ikke relevant
         " AND (LOWER(title) LIKE $2 OR LOWER(tldr) LIKE $2 OR LOWER(body) LIKE $2 OR LOWER(category) LIKE $2)"
         " ORDER BY timestamp DESC LIMIT 100"
     )
@@ -431,9 +446,26 @@ async def send_evening_summary(user: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Railways private nettverk (postgres.railway.internal) kan bruke noen
+    # sekunder på å bli klart etter oppstart. Prøv databasen flere ganger
+    # før vi gir opp.
+    for attempt in range(1, 11):
+        try:
+            logger.info(f"Starter init_db (forsøk {attempt}/10)...")
+            await init_db()
+            break
+        except Exception as e:
+            if attempt == 10:
+                logger.error(f"FATAL: Fikk ikke kontakt med databasen: {e}", exc_info=True)
+                raise
+            logger.warning(f"Database ikke klar ennå ({e}) – prøver igjen om 3 sek")
+            try:
+                import database as _db
+                _db._pool = None
+            except Exception:
+                pass
+            await asyncio.sleep(3)
     try:
-        logger.info("Starter init_db...")
-        await init_db()
         logger.info("Starter init_ai_tables...")
         await init_ai_tables()
         logger.info("Starter init_user_tables...")
@@ -643,7 +675,8 @@ async def update_settings(updates: dict, user: CurrentUser):
         "caldav_enabled", "caldav_url", "caldav_username", "caldav_password", "caldav_calendars",
         "showbie_token", "showbie_user_id", "showbie_token_expires", "showbie_enabled", "showbie_fingerprint", "showbie_child_ids",
         "evening_summary_enabled", "evening_summary_time",
-        "family_context", "ai_learned_context", "claude_api_key"
+        "family_context", "ai_learned_context", "claude_api_key",
+        "ai_scoring_enabled"
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
     await update_user_settings(user["id"], filtered)
@@ -678,6 +711,8 @@ async def update_message(message_id: str, update: StatusUpdate, user: CurrentUse
     return {"ok": True}
 
 async def _maybe_update_profile(user_id: str):
+    if not await _scoring_enabled(user_id):
+        return
     try:
         read_ex, skip_ex = await get_classified_messages(user_id=user_id)
         if len(read_ex) + len(skip_ex) >= 20:
@@ -703,6 +738,10 @@ async def process_all_messages(user: CurrentUser):
 async def _process_all_loop(user_id: str):
     """Kjører AI-scoring i loop til alle meldinger er behandlet."""
     total = 0
+    if not await _scoring_enabled(user_id):
+        n = await skip_unprocessed_messages(user_id)
+        logger.info(f"[AI] Scoring av – {n} meldinger arkivert som ikke relevant")
+        return
     settings = await get_user_settings(user_id)
     api_key = _get_api_key(settings)
     if not api_key:
@@ -806,8 +845,8 @@ async def ingest_messages(
                 except Exception:
                     pass
     await upsert_messages(payload.messages)
-    if payload.user_id:
-        asyncio.create_task(run_ai_processing(payload.user_id))
+    if resolved_user_id:
+        asyncio.create_task(run_ai_processing(resolved_user_id))
     return {"ok": True, "count": len(payload.messages)}
 
 
@@ -1160,7 +1199,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
             " time_label AS time, timestamp, priority, status, meta"
             " FROM messages"
             " WHERE user_id = $1"
-            " AND status != 'skipped'"
+            # Tar med alle meldinger, også de som er markert som ikke relevant
             f" {date_filter}"
             " AND (LOWER(title) LIKE $2"
             " OR LOWER(tldr) LIKE $2"

@@ -2,7 +2,6 @@ import os
 import asyncpg
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -159,96 +158,6 @@ async def update_message_status(message_id: str, status: str, user_id: str = Non
                 WHERE id = $2
             """, status, message_id)
     return result == "UPDATE 1"
-
-
-async def update_messages_status_bulk(message_ids: list[str], status: str, user_id: str = None) -> int:
-    """Oppdaterer status på flere meldinger samtidig. Returnerer antall oppdaterte rader."""
-    if not message_ids:
-        return 0
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if user_id:
-            result = await conn.execute("""
-                UPDATE messages
-                SET status = $1, updated_at = NOW()
-                WHERE id = ANY($2::text[]) AND user_id = $3
-            """, status, message_ids, user_id)
-        else:
-            result = await conn.execute("""
-                UPDATE messages
-                SET status = $1, updated_at = NOW()
-                WHERE id = ANY($2::text[])
-            """, status, message_ids)
-    try:
-        return int(result.split()[-1])
-    except (IndexError, ValueError):
-        return 0
-
-
-async def get_similar_unread_messages(message_id: str, user_id: str, limit: int = 30) -> list[dict]:
-    """
-    Finner andre uleste meldinger som ligner på den gitte meldingen –
-    brukt til 'Bruk på lignende meldinger'-funksjonen etter manuell filtrering.
-    Matcher på samme kilde + kategori (f.eks. samme WhatsApp-gruppe), og i
-    tillegg samme Showbie-oppgave hvis meta.assignment finnes, for tettere treff.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        ref = await conn.fetchrow(
-            "SELECT source, category, meta FROM messages WHERE id = $1 AND user_id = $2",
-            message_id, user_id
-        )
-        if not ref or not ref["source"] or not ref["category"]:
-            return []
-
-        meta = ref["meta"]
-        if isinstance(meta, str):
-            import json
-            try:
-                meta = json.loads(meta)
-            except Exception:
-                meta = {}
-        assignment = (meta or {}).get("assignment") if isinstance(meta, dict) else None
-
-        if assignment:
-            rows = await conn.fetch("""
-                SELECT id, title, source_label FROM messages
-                WHERE user_id = $1 AND source = $2 AND category = $3
-                  AND status = 'unread' AND id != $4
-                  AND meta->>'assignment' = $5
-                ORDER BY timestamp DESC LIMIT $6
-            """, user_id, ref["source"], ref["category"], message_id, assignment, limit)
-        else:
-            rows = await conn.fetch("""
-                SELECT id, title, source_label FROM messages
-                WHERE user_id = $1 AND source = $2 AND category = $3
-                  AND status = 'unread' AND id != $4
-                ORDER BY timestamp DESC LIMIT $5
-            """, user_id, ref["source"], ref["category"], message_id, limit)
-
-    return [dict(r) for r in rows]
-
-
-async def get_category_skip_rate(user_id: str, source: str, category: str, min_samples: int = 5) -> Optional[float]:
-    """
-    Regner ut hvor stor andel av tidligere klassifiserte meldinger (lest+ikke
-    relevant) fra samme kilde+kategori som ble markert 'ikke relevant'.
-    Returnerer None hvis det ikke finnes nok historikk til å stole på tallet
-    (brukes til å hoppe over AI-vurdering for tydelig etablerte mønstre).
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("""
-            SELECT
-                COUNT(*) FILTER (WHERE status = 'skipped') AS skipped,
-                COUNT(*) AS total
-            FROM messages
-            WHERE user_id = $1 AND source = $2 AND category = $3
-              AND status IN ('read', 'skipped')
-        """, user_id, source, category)
-    if not row or row["total"] < min_samples:
-        return None
-    return row["skipped"] / row["total"]
 
 
 async def get_stats() -> dict:
@@ -466,6 +375,28 @@ async def get_unprocessed_messages(limit: int = 20, user_id: str = None) -> list
                 ORDER BY timestamp DESC LIMIT $1
             """, limit)
     return [dict(r) for r in rows]
+
+
+async def skip_unprocessed_messages(user_id: str) -> int:
+    """
+    Brukes når AI-scoring er skrudd av: alle nye meldinger arkiveres som
+    «Ikke relevant» uten å kalle Claude. ai_score settes til 'off' slik at
+    de ikke plukkes opp igjen senere.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE messages SET
+                ai_score   = 'off',
+                ai_reason  = 'AI-scoring skrudd av',
+                status     = CASE WHEN status = 'unread' THEN 'skipped' ELSE status END,
+                updated_at = NOW()
+            WHERE ai_score IS NULL AND user_id = $1
+        """, user_id)
+    try:
+        return int(result.split()[-1])
+    except Exception:
+        return 0
 
 
 # ─── Push-abonnementer ────────────────────────────────────────────────────────

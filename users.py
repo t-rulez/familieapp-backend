@@ -104,7 +104,8 @@ async def init_user_tables():
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS showbie_child_ids TEXT DEFAULT ''")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_enabled BOOLEAN DEFAULT FALSE")
         await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS evening_summary_time TEXT DEFAULT '20:00'")
-        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS new_messages_push_enabled BOOLEAN DEFAULT TRUE")
+        # AI-scoring av/på (på som standard – samme oppførsel som før)
+        await conn.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS ai_scoring_enabled BOOLEAN DEFAULT TRUE")
 
     logger.info("Brukertabeller initialisert")
     # Migrer eksisterende data i egen connection
@@ -294,6 +295,7 @@ async def get_all_active_users() -> list[dict]:
                 s.wa_service_url, s.wa_group_filter, s.wa_category, s.wa_source_label, s.wa_enabled,
                 s.showbie_token, s.showbie_user_id, s.showbie_fingerprint, s.showbie_enabled, s.showbie_child_ids,
                 s.evening_summary_enabled, s.evening_summary_time,
+                s.ai_scoring_enabled,
                 s.claude_api_key
             FROM users u
             JOIN user_settings s ON u.id = s.user_id
