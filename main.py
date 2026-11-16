@@ -1272,6 +1272,19 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     if is_time_query:
         logger.info(f"[AI/CHAT] Tidsspørsmål – begrenser til siste 14 dager")
 
+    # Rene substreng-søk ("LIKE %ord%") bommer på sammensatte ord som ikke finnes
+    # ordrett i kilden - f.eks. "skoleuke" finnes ingen steder i teksten selv om
+    # meldingen tydelig handler om skole (Showbie-ukeplan, "6C", osv). Når et søkeord
+    # inneholder en av disse stammene, utvider vi derfor søket til også å ta med
+    # meldinger fra de kildene/kategoriene som stammen peker på, uavhengig av om selve
+    # ordet finnes ordrett i teksten.
+    SOURCE_HINT_STEMS = {
+        'skole': "(source IN ('showbie','skolemelding') OR LOWER(category) LIKE '%skole%')",
+        'lekse': "(source IN ('showbie','skolemelding') OR LOWER(body) LIKE '%lekse%')",
+        'showbie': "source = 'showbie'",
+        'ukeplan': "source IN ('showbie','skolemelding')",
+    }
+
     if words:
         logger.info(f"[AI/CHAT] Søkeord: {words}")
         sql = (
@@ -1301,6 +1314,28 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                         except: m["meta"] = {}
                     m["sourceLabel"] = m.pop("source_label", m.get("source", ""))
                     relevant.append(m)
+
+                for stem, extra_cond in SOURCE_HINT_STEMS.items():
+                    if stem not in word:
+                        continue
+                    hint_sql = (
+                        "SELECT id, source, source_label, category, title, tldr, body,"
+                        " time_label AS time, timestamp, priority, status, meta"
+                        " FROM messages"
+                        f" WHERE user_id = $1 {date_filter} AND {extra_cond}"
+                        " ORDER BY timestamp DESC LIMIT 30"
+                    )
+                    hint_rows = await conn.fetch(hint_sql, user["id"])
+                    for row in hint_rows:
+                        m = dict(row)
+                        if m["id"] in seen_ids:
+                            continue
+                        seen_ids.add(m["id"])
+                        if m.get("meta") and not isinstance(m["meta"], dict):
+                            try: m["meta"] = _json.loads(m["meta"])
+                            except: m["meta"] = {}
+                        m["sourceLabel"] = m.pop("source_label", m.get("source", ""))
+                        relevant.append(m)
         logger.info(f"[AI/CHAT] Fant {len(relevant)} relevante meldinger")
 
     def score_msg(m):
