@@ -1531,15 +1531,22 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     )
 
     import json
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 6000,
-                  "thinking": {"type": "adaptive"},
-                  "output_config": {"effort": "medium"},
-                  "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
-        )
+    # Timeout økt fra 60s: med "thinking" (effort medium) og mye kontekst (meldinger +
+    # kalender) kan selve Claude-kallet ta god tid, og 60s ga httpcore.ReadTimeout -> 500.
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10)) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": "claude-sonnet-5", "max_tokens": 6000,
+                      "thinking": {"type": "adaptive"},
+                      "output_config": {"effort": "medium"},
+                      "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
+            )
+    except httpx.TimeoutException:
+        logger.error("[UKESOVERSIKT] Timeout mot Claude API")
+        raise HTTPException(status_code=504, detail="AI-en brukte for lang tid, prøv igjen")
+
     if resp.status_code != 200:
         logger.error(f"[UKESOVERSIKT] API feil: {resp.status_code} {resp.text[:200]}")
         raise HTTPException(status_code=502, detail="Klarte ikke å hente ukesoversikt (API-feil)")
