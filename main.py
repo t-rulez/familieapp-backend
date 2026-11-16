@@ -2,8 +2,11 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timezone, date, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
+
+OSLO_TZ = ZoneInfo("Europe/Oslo")
 
 # Skru av støy fra tredjeparts biblioteker
 logging.getLogger("icalendar").setLevel(logging.CRITICAL)
@@ -1476,15 +1479,20 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     if settings and settings.get("caldav_enabled") and settings.get("caldav_username") and settings.get("caldav_password"):
         try:
             from caldav_service import fetch_calendar_events, format_events_for_ai
-            days_ahead = max((sunday - today).days + 1, 1)
+            # Hent fra midnatt MANDAG denne uken (ikke "nå") - ellers faller allerede
+            # passerte aktiviteter tidligere i uken/dagen helt ut av kalendersøket, og
+            # ukesoversikten viser da ikke ferdige ting som skjedde tidligere i dag.
+            week_start_dt = datetime(monday.year, monday.month, monday.day, 0, 0, tzinfo=OSLO_TZ)
+            days_ahead = max((sunday - monday).days + 1, 1)
             events = await fetch_calendar_events(
                 url=settings.get("caldav_url", "https://caldav.icloud.com"),
                 username=settings.get("caldav_username", ""),
                 password=settings.get("caldav_password", ""),
                 calendar_filter=settings.get("caldav_calendars", ""),
-                days_ahead=days_ahead
+                days_ahead=days_ahead,
+                start_date=week_start_dt
             )
-            calendar_section = f"KALENDER (frem til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
+            calendar_section = f"KALENDER (hele uken, mandag {monday.day}. til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
         except Exception as e:
             logger.warning(f"[UKESOVERSIKT] Kalender-henting feilet: {e}")
 
@@ -1497,6 +1505,9 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         f"Dagens dato er {today.isoformat()}. Uken du skal lage oversikt for er "
         f"{'denne uken' if week_offset == 0 else 'NESTE uke'}: mandag {day_dates[0].day}. "
         f"til søndag {day_dates[6].day}.\n"
+        "Vis HELE uken konsekvent, fra mandag til søndag - også dager og aktiviteter som "
+        "allerede har passert eller er gjennomført (f.eks. en trening tidligere i dag, eller "
+        "tidligere i uken). Ikke utelat noe bare fordi det ligger bakover i tid denne uken.\n"
         f"{SPOND_CALENDAR_RULE}\n\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
@@ -1505,8 +1516,11 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "Lag en ukesoversikt fordelt på person og dag, for disse fire personene: "
         f"{', '.join(WEEK_PEOPLE)} (Gustav og Rasmus er barn, Kristin og Truls er foreldre).\n"
         "For hver dag mandag-søndag og hver person: list korte stikkord for skolearbeid "
-        "(lekser, prøver, ting som må tas med), fritidsaktiviteter (trening, kamper, møter) "
-        "og andre avtaler.\n"
+        "(lekser, prøver, innleveringer, ting som må tas med) og spesielle skoleaktiviteter "
+        "(turdag, tema-/aktivitetsdag, skolearrangement, foreldremøte, utflukt o.l. - typisk "
+        "fra Showbie eller skolemelding), fritidsaktiviteter (trening, kamper, møter) og andre "
+        "avtaler. Skoleinnhold er like viktig som resten og skal alltid tas med når det finnes "
+        "i kildene - ikke bare idrett/fritid.\n"
         "Format på hvert stikkord: '<emoji> <HH:MM> <aktivitet>' når tidspunkt er kjent "
         "(24-timers format med kolon, f.eks. '18:00'), ellers '<emoji> <aktivitet>' uten tid. "
         "Velg selv ett emoji som passer aktiviteten (f.eks. ⚽🏒🤾🎿📓📝💉🎉🍷👔🎂), ett emoji per stikkord. "

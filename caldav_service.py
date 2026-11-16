@@ -13,15 +13,22 @@ async def fetch_calendar_events(
     username: str,
     password: str,
     calendar_filter: str = "",
-    days_ahead: int = 14
+    days_ahead: int = 14,
+    start_date: Optional[datetime] = None
 ) -> list[dict]:
-    """Henter kommende kalenderoppføringer fra CalDAV (iCloud)."""
+    """Henter kalenderoppføringer fra CalDAV (iCloud).
+
+    Som standard hentes oppføringer fra "nå" og fremover (days_ahead dager). Send inn
+    start_date (en tidssone-bevisst datetime) for å hente fra et fast tidspunkt i stedet -
+    f.eks. midnatt mandag denne uken, slik at hele uken vises i ukesoversikten, inkludert
+    aktiviteter tidligere i dag/uken som allerede er ferdig.
+    """
     return await asyncio.to_thread(
-        _fetch_sync, url, username, password, calendar_filter, days_ahead
+        _fetch_sync, url, username, password, calendar_filter, days_ahead, start_date
     )
 
 
-def _fetch_sync(url, username, password, calendar_filter, days_ahead):
+def _fetch_sync(url, username, password, calendar_filter, days_ahead, start_date=None):
     try:
         import caldav
         from icalendar import Calendar as iCal
@@ -37,7 +44,7 @@ def _fetch_sync(url, username, password, calendar_filter, days_ahead):
                 f in (c.name or "").lower() for f in filter_list
             )]
 
-        now = datetime.now(timezone.utc)
+        now = start_date if start_date is not None else datetime.now(timezone.utc)
         end = now + timedelta(days=days_ahead)
 
         events = []
