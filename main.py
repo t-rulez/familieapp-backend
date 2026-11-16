@@ -77,6 +77,27 @@ last_sync: Optional[str] = None
 # Delt regel brukt i alle AI-prompter (ukesoversikt, AI-assistent, kveldssammendrag):
 # kalenderen inneholder ofte en generisk kopi av Spond-aktiviteter uten lagnavn.
 # Spond-meldingen selv VET hvilket lag/barn det gjelder, og skal derfor overstyre.
+def _spond_child_tag(m: dict, family_ctx: str) -> str:
+    """Returnerer "Gjelder: <barn>" for en Spond-melding, hvis gruppenavnet (meta.group,
+    med category som fallback) tydelig matcher ett barns lagnavn i familieprofilen -
+    ellers "". Kjøres LIVE ved hvert søk/spørring (ikke ved innlesing fra Spond), slik
+    at den alltid bruker den nåværende familieprofilen - ingen "gammel data"-problem
+    hvis et lagnavn endres, og ingen egen backfill-jobb trengs."""
+    if m.get("source") != "spond" or not family_ctx:
+        return ""
+    meta = m.get("meta") or {}
+    if isinstance(meta, str):
+        try:
+            import json as _json
+            meta = _json.loads(meta)
+        except Exception:
+            meta = {}
+    group_name = (meta or {}).get("group", "") or m.get("category", "")
+    from family_profile import match_child_from_group
+    child = match_child_from_group(group_name, family_ctx)
+    return f"Gjelder: {child}" if child else ""
+
+
 SPOND_CALENDAR_RULE = (
     "VIKTIG REGEL om kalender vs. Spond: Felles-kalenderen inneholder noen ganger kopier av "
     "aktiviteter som opprinnelig kommer fra Spond (idrettslag/foreldregrupper). Kalenderkopien "
@@ -182,6 +203,11 @@ async def sync_user(user: dict, since: Optional[datetime] = None) -> int:
             svc = SpondService(username=user["spond_username"], password=user["spond_password"])
             msgs = await svc.fetch_all(since=since)
             for m in msgs: m["user_id"] = user_id
+            # Merk: hvilket barn en Spond-aktivitet gjelder avgjøres IKKE her ved
+            # innlesing, men live ved hvert søk/spørring (se _spond_child_tag i
+            # main.py / family_profile.py) - det er like treffsikkert (ren
+            # tekstmatching, ingen AI involvert), men unngår at gamle meldinger blir
+            # stående med utdatert tagging hvis familieprofilen endres senere.
             logger.info(f"[SPOND] {len(msgs)} meldinger hentet")
             return msgs
         except Exception as e:
@@ -367,6 +393,7 @@ async def send_evening_summary(user: dict):
     today_str = f"{days_no[today.weekday()]} {today.day}. {months_no[today.month-1]} {today.year}"
     tomorrow_str = f"{days_no[tomorrow.weekday()]} {tomorrow.day}. {months_no[tomorrow.month-1]} {tomorrow.year}"
 
+    family_ctx = user.get("family_context", "")
     question = f"Gi meg en kort oversikt over morgendagen ({tomorrow_str}): skole og aktiviteter. Maks 5-6 setninger. Ikke ta med forberedelser, ikke lag oppsummering. Kun kort svar."
 
     stopwords = {"jeg","deg","han","hun","den","det","de","vi","ikke","har","er","var",
@@ -403,6 +430,9 @@ async def send_evening_summary(user: dict):
     def fmt(m):
         src = m.get("source_label") or m.get("source", "?")
         parts = [f"[{src} - {m.get('time','')}] {m.get('title','')}"]
+        tag = _spond_child_tag(m, family_ctx)
+        if tag:
+            parts.append(f"  {tag}")
         if m.get("tldr"):
             parts.append(f"  Sammendrag: {m['tldr']}")
         if m.get("body") and m["body"] != m.get("tldr", ""):
@@ -1043,6 +1073,8 @@ async def fetch_history(req: FetchHistoryRequest, user: CurrentUser):
                 # fetch_all already filters from history_from in spond_service
                 for m in msgs:
                     m["user_id"] = user["id"]
+                # Barn-matching skjer live ved søk, ikke her ved innlesing - se
+                # _spond_child_tag i main.py.
                 all_messages.extend(msgs)
                 results["spond"] = len(msgs)
         except Exception as e:
@@ -1366,6 +1398,9 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
 
     def format_msg(m):
         parts = [f"[{m['sourceLabel']} - {m.get('category','')} - {m['time']}]", f"Tittel: {m['title']}"]
+        tag = _spond_child_tag(m, req.family_context)
+        if tag:
+            parts.append(tag)
         if m.get('tldr'):
             parts.append(f"Sammendrag: {m['tldr']}")
         if m.get('body') and m['body'] != m.get('tldr',''):
@@ -1518,6 +1553,9 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     def fmt(m):
         src = m.get("source_label") or m.get("source", "?")
         parts = [f"[{src} - {m.get('category','')} - {m.get('time','')}] {m.get('title','')}"]
+        tag = _spond_child_tag(m, family_ctx)
+        if tag:
+            parts.append(f"  {tag}")
         if m.get("tldr"):
             parts.append(f"  Sammendrag: {m['tldr']}")
         if m.get("body") and m["body"] != m.get("tldr", ""):
