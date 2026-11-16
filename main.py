@@ -1506,7 +1506,9 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 4096,
+            json={"model": "claude-sonnet-5", "max_tokens": 6000,
+                  "thinking": {"type": "adaptive"},
+                  "output_config": {"effort": "medium"},
                   "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
         )
     if resp.status_code != 200:
