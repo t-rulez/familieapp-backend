@@ -21,13 +21,19 @@ logging.getLogger("uvicorn.access").addFilter(_NoiseFilter())
 
 class _IcalNoiseFilter(logging.Filter):
     """Den harmløse 'Ical data was modified ... breaks the icalendar standard'-meldingen
-    kommer fra icalendar-biblioteket via logging.error() uten eget loggernavn, så den
-    lander på selve root-loggeren og unngår setLevel()-kallene over. Filtrer den bort
-    her i stedet, uten å påvirke andre feilmeldinger som også skulle gå gjennom root."""
+    (og selve diff-dumpen biblioteket logger ved siden av den) kommer fra icalendar-
+    biblioteket via logging.error() uten eget loggernavn, så den lander på selve
+    root-loggeren og unngår setLevel()-kallene over. Filtrer den bort her i stedet,
+    uten å påvirke andre feilmeldinger som også skulle gå gjennom root."""
     _MARKERS = ("Ical data was modified", "breaks the icalendar standard")
     def filter(self, record):
         msg = record.getMessage()
-        return not any(m in msg for m in self._MARKERS)
+        if any(m in msg for m in self._MARKERS):
+            return False
+        # Selve diff-dumpen av iCal-fiksen: en unified diff som nevner VEVENT/DTSTAMP
+        if msg.startswith("---") and ("BEGIN:VEVENT" in msg or "DTSTAMP:" in msg):
+            return False
+        return True
 
 logging.getLogger().addFilter(_IcalNoiseFilter())
 from contextlib import asynccontextmanager
@@ -1500,14 +1506,20 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 2000,
+            json={"model": "claude-sonnet-5", "max_tokens": 4096,
                   "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
         )
     if resp.status_code != 200:
         logger.error(f"[UKESOVERSIKT] API feil: {resp.status_code} {resp.text[:200]}")
         raise HTTPException(status_code=502, detail="Klarte ikke å hente ukesoversikt (API-feil)")
 
-    raw = _extract_text(resp.json().get("content"))
+    resp_json = resp.json()
+    raw = _extract_text(resp_json.get("content"))
+    if not raw:
+        # Skjedde tidligere ved for lavt max_tokens: modellen brukte hele budsjettet på
+        # "thinking" og rakk aldri å skrive selve JSON-svaret (stop_reason: max_tokens).
+        logger.error(f"[UKESOVERSIKT] Tomt tekst-svar (stop_reason={resp_json.get('stop_reason')}): {str(resp_json)[:300]}")
+        raise HTTPException(status_code=502, detail="Fikk tomt svar fra AI-en, prøv igjen")
     try:
         start = raw.find("{")
         end = raw.rfind("}") + 1
