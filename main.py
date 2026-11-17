@@ -1728,6 +1728,158 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
     return {"answer": "Beklager, noe gikk galt etter 3 forsøk."}
 
 
+# ─── WhatsApp-temasøk (klikk på stikkord i ukeoversikten) ───────────────────
+
+class WhatsappTopicRequest(BaseModel):
+    topic: str
+
+@app.post("/ai/whatsapp-topic")
+async def ai_whatsapp_topic(req: WhatsappTopicRequest, user: CurrentUser):
+    import json
+    import asyncio
+
+    settings = await get_user_settings(user["id"])
+    api_key = _get_api_key(settings)
+    if not api_key:
+        return {"found": False, "summary": "Claude API-nøkkel er ikke konfigurert. Legg inn din API-nøkkel i Innstillinger → Annet.", "messages": []}
+
+    topic = (req.topic or "").strip()
+    if not topic:
+        return {"found": False, "summary": "Mangler søketema.", "messages": []}
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, category, title, body, meta, timestamp"
+            " FROM messages"
+            " WHERE user_id = $1 AND source = 'whatsapp'"
+            " ORDER BY timestamp DESC LIMIT 400",
+            user["id"]
+        )
+
+    if not rows:
+        return {"found": False, "summary": "Fant ingen lagrede WhatsApp-meldinger.", "messages": []}
+
+    msg_rows = []
+    for row in rows:
+        m = dict(row)
+        meta = m.get("meta")
+        if meta and not isinstance(meta, dict):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        m["meta"] = meta or {}
+        msg_rows.append(m)
+    # Kronologisk (eldst først) - gjør dialogen lettere å lese for AI-en
+    msg_rows.sort(key=lambda m: m["timestamp"])
+
+    def fmt_ts(ts):
+        try:
+            return ts.strftime("%d.%m %H:%M")
+        except Exception:
+            return str(ts)
+
+    lines = []
+    for idx, m in enumerate(msg_rows):
+        meta = m["meta"]
+        group = meta.get("group") or m.get("category") or ""
+        sender = meta.get("sender") or ""
+        body = (m.get("body") or "").replace("\n", " ")
+        if len(body) > 400:
+            body = body[:400] + "..."
+        lines.append(f"[{idx}] ({fmt_ts(m['timestamp'])}) {group} - {sender}: {body}")
+
+    msg_block = "\n".join(lines)
+    if len(msg_block) > 40000:
+        msg_block = msg_block[-40000:]  # behold de nyeste hvis for mye tekst
+
+    system = (
+        "Du hjelper en familie med å finne WhatsApp-meldinger knyttet til et bestemt tema/stikkord "
+        "fra familiekalenderen, f.eks. 'R Bursdag Mega Fun'. Under følger en nummerert liste med "
+        "WhatsApp-meldinger (format: [indeks] (dato tid) gruppe - avsender: meldingstekst), sortert "
+        "kronologisk fra eldst til nyest.\n\n"
+        "Finn ALLE meldingene som faktisk handler om temaet. Familiens forbokstaver brukes ofte i "
+        "stikkord og kan dukke opp i meldingene også: R=Rasmus, G=Gustav, K=Kristin, T=Truls.\n\n"
+        "Svar KUN med et JSON-objekt, uten noe tekst før eller etter:\n"
+        '{"found": true/false, "message_indices": [0, 4, 7], "summary": "kort oppsummering på norsk av '
+        'hva dialogen handler om, eventuell konklusjon/avtale, og hvem som sa hva"}\n\n'
+        "Hvis ingen meldinger er relevante: found=false, message_indices=[], og en kort forklarende "
+        "summary (f.eks. 'Fant ingen WhatsApp-meldinger om dette temaet').\n"
+        "ALDRI finn opp meldinger eller innhold som ikke står i listen over."
+    )
+    user_content = f"TEMA: {topic}\n\nWHATSAPP-MELDINGER:\n{msg_block}"
+
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                res = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={
+                        "model": "claude-sonnet-5", "max_tokens": 1200,
+                        "thinking": {"type": "adaptive"},
+                        "output_config": {"effort": "low"},
+                        "system": system,
+                        "messages": [{"role": "user", "content": user_content}]
+                    }
+                )
+            if res.status_code in (429, 529):
+                wait = [5, 15, 30][attempt]
+                logger.warning(f"[WHATSAPP-TOPIC] API overbelastet ({res.status_code}), venter {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            if res.status_code != 200:
+                logger.error(f"[WHATSAPP-TOPIC] API feil: {res.status_code} {res.text[:200]}")
+                return {"found": False, "summary": f"Beklager, API-feil ({res.status_code}). Prøv igjen.", "messages": []}
+            data = res.json()
+            raw = _extract_text(data.get("content"))
+            if not raw:
+                logger.error(f"[WHATSAPP-TOPIC] Tomt svar: {data}")
+                return {"found": False, "summary": "Beklager, fikk tomt svar fra AI-en. Prøv igjen.", "messages": []}
+            try:
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                parsed = json.loads(raw[start:end])
+            except Exception as e:
+                logger.error(f"[WHATSAPP-TOPIC] Klarte ikke å tolke JSON-svar: {e} – raw: {raw[:300]}")
+                return {"found": False, "summary": "Beklager, klarte ikke tolke AI-svaret. Prøv igjen.", "messages": []}
+
+            found = bool(parsed.get("found"))
+            summary = parsed.get("summary") or ""
+            indices = parsed.get("message_indices") or []
+
+            # Bygg selve meldingslisten fra DATABASERADENE (aldri fra AI-generert tekst),
+            # samme prinsipp som Spond-matchingen - AI-en peker bare ut HVILKE meldinger
+            # som er relevante, den gjengir ikke innholdet selv.
+            matched = []
+            for i in indices:
+                try:
+                    i = int(i)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= i < len(msg_rows):
+                    m = msg_rows[i]
+                    meta = m["meta"]
+                    matched.append({
+                        "group": meta.get("group") or m.get("category") or "",
+                        "sender": meta.get("sender") or "",
+                        "body": m.get("body") or "",
+                        "timestamp": m["timestamp"].isoformat() if m.get("timestamp") else None,
+                    })
+            matched.sort(key=lambda x: x["timestamp"] or "")
+
+            return {"found": found, "summary": summary, "messages": matched}
+        except httpx.TimeoutException:
+            logger.warning(f"[WHATSAPP-TOPIC] Timeout (forsøk {attempt+1}/3)")
+            if attempt == 2:
+                return {"found": False, "summary": "Beklager, forespørselen tok for lang tid. Prøv igjen.", "messages": []}
+        except Exception as e:
+            logger.error(f"[WHATSAPP-TOPIC] Feil: {e}")
+            return {"found": False, "summary": "Beklager, noe gikk galt. Prøv igjen.", "messages": []}
+    return {"found": False, "summary": "Beklager, noe gikk galt etter 3 forsøk.", "messages": []}
+
+
 # ─── Ukesoversikt (til iPad-visningen) ────────────────────────────────────────
 
 WEEK_PEOPLE = ["Gustav", "Rasmus", "Kristin", "Truls"]
