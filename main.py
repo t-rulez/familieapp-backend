@@ -190,6 +190,11 @@ SPOND_CALENDAR_RULE = (
     "sluttdag/-tid, f.eks. 'fredag 20. nov kl. 17:00 til søndag 22. nov kl. 18:00'). Slike "
     "arrangementer skal vises på HVER ENKELT dag i det tidsrommet (fredag OG lørdag OG "
     "søndag i eksempelet), ikke bare på startdagen.\n"
+    "  - En kalenderoppføring som er felles/ukjent (ingen '(Gjelder: <barn>)'-tag, og "
+    "tittelen nevner heller ikke noe barn direkte) skal ALDRI utelates. Den skal vises under "
+    "BÅDE Kristin OG Truls (ikke under Gustav eller Rasmus) - det er standard-plasseringen "
+    "for avtaler som ikke er spesifikt knyttet til ett barn, f.eks. 'Julebord', 'Foreldremøte' "
+    "eller andre familie-/foreldre-arrangementer.\n"
     "VIKTIG om klokkeslett: bruk ALLTID klokkeslettet NØYAKTIG som det står i kilden (kalender "
     "eller Spond) - f.eks. '16:50' skal forbli '16:50', ALDRI rundes av til '17:00' eller annet "
     "'pent' tidspunkt. Kopier minuttallet ordrett, ikke avrund eller anslå."
@@ -559,7 +564,7 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 150,
+            json={"model": "claude-sonnet-5", "max_tokens": 150, "temperature": 0,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
@@ -1549,7 +1554,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "temperature": 0, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
@@ -1745,19 +1750,20 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     )
 
     import json
-    # Timeout økt fra 60s: med "thinking" (effort medium) og mye kontekst (meldinger +
-    # kalender) kan selve Claude-kallet ta god tid, og 60s ga httpcore.ReadTimeout -> 500.
+    # Timeout økt fra 60s: med mye kontekst (meldinger + kalender) kan selve
+    # Claude-kallet ta god tid, og 60s ga httpcore.ReadTimeout -> 500.
+    # "thinking" er fjernet igjen: når "thinking" er på, tvinger Anthropic-APIet
+    # temperature til 1 (kan ikke overstyres) - det ga synlig ulike svar fra gang til
+    # gang på denne oppgaven (hvilket barn en aktivitet gjelder, hvilken dag leksene
+    # ligger på, osv), selv uten noen endring i grunnlagsdataene mellom kallene.
+    # Oppgaven er i bunn og grunn mekanisk kategorisering - det vil vi ha konsekvent,
+    # ikke kreativt - så vi bruker "temperature": 0 i stedet, uten "thinking".
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10)) as client:
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": "claude-sonnet-5", "max_tokens": 8000,
-                      "thinking": {"type": "adaptive"},
-                      # "medium" brukte av og til for mye av budsjettet på tenking og rakk
-                      # aldri frem til selve JSON-svaret (stop_reason: max_tokens). Denne
-                      # oppgaven er i bunn og grunn mekanisk kategorisering, så "low" holder.
-                      "output_config": {"effort": "low"},
+                json={"model": "claude-sonnet-5", "max_tokens": 8000, "temperature": 0,
                       "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
             )
     except httpx.TimeoutException:
