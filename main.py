@@ -1717,6 +1717,14 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                     uid, week_start_dt, week_end_dt
                 )
             logger.info(f"[UKESOVERSIKT] Spond-arrangementer denne uken (uavh. av lagringsdato): {len(spond_event_rows)}")
+            for r in spond_event_rows:
+                _m = dict(r)
+                _meta = _spond_meta(_m)
+                logger.info(
+                    f"[UKESOVERSIKT]   rad: category={_m.get('category')!r} "
+                    f"meta.group={_meta.get('group')!r} eventStart={_meta.get('eventStart')!r} "
+                    f"-> match={_spond_child_name(_m, family_ctx)!r}"
+                )
             spond_rows_for_tagging = [dict(r) for r in rows] + [dict(r) for r in spond_event_rows]
             events = _tag_calendar_events_with_spond(events, spond_rows_for_tagging, family_ctx)
             calendar_section = f"KALENDER (hele uken, mandag {monday.day}. til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
