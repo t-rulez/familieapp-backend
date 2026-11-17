@@ -40,7 +40,10 @@ _EXCLUSION_RE = re.compile(r'\bIKKE\b[^.]*\.?', re.IGNORECASE)
 
 
 def extract_child_team_names(family_context: str) -> dict[str, list[str]]:
-    """Trekker ut alle anførselstegn-navn per person fra familieprofilen."""
+    """Trekker ut ALT anførselstegn-tekst per person fra familieprofilen - uansett
+    lengde. Alt brukeren setter i anførselstegn er meningsfullt (lagnavn, kallenavn
+    osv.) og skal brukes direkte - se match_child_from_group for hvordan et kort
+    kallenavn (f.eks. "G") matches trygt uten å gi falske treff inni andre ord."""
     if not family_context:
         return {}
     headers = list(_HEADER_RE.finditer(family_context))
@@ -50,18 +53,39 @@ def extract_child_team_names(family_context: str) -> dict[str, list[str]]:
         start = h.end()
         end = headers[i + 1].start() if i + 1 < len(headers) else len(family_context)
         section = _EXCLUSION_RE.sub(' ', family_context[start:end])
-        names = _QUOTED_RE.findall(section)
+        names = [n.strip() for n in _QUOTED_RE.findall(section) if n.strip()]
         if names:
             result.setdefault(name, [])
-            result[name].extend(n.strip() for n in names if n.strip())
+            result[name].extend(names)
     return result
+
+
+def _word_boundary_match(haystack: str, needle: str) -> bool:
+    """Sjekker om "needle" finnes i "haystack" som et HELT ord/uttrykk (med
+    ordgrense før og etter), ikke som en vilkårlig delstreng.
+
+    Dette er forskjellen mellom "treffer korrekt" og "treffer hvor som helst":
+    en ren delstreng-sjekk (f.eks. "g" in "lillegutt 2015 ready") slår til midt
+    inni ordet "gutt" og også på "r" i "ready" - det gjorde ALLE gruppenavn
+    tvetydige så snart et kort kallenavn som "G" eller "R" ble lagt til i
+    profilen. Med ordgrense (\\b) krever vi i stedet at "g" eller "r" står som
+    et eget, avgrenset ord - noe det så godt som aldri gjør midt inni et annet
+    ord - mens et lengre, flerords lagnavn som "Lillegutt 2015 Ready" fortsatt
+    trygt gjenkjennes som helhet."""
+    if not needle:
+        return False
+    try:
+        return re.search(r'\b' + re.escape(needle) + r'\b', haystack) is not None
+    except re.error:
+        return needle in haystack
 
 
 def match_child_from_group(group_name: str, family_context: str) -> str:
     """Returnerer navnet på barnet et gruppenavn tydelig tilhører, basert KUN på
     anførselstegn-navnene i familieprofilen - eller "" hvis ingen/flere barn matcher.
-    Matcher case-insensitivt, og godtar at det ene er en delstreng av det andre (så
-    "Lillegutt 2015 Ready" og "lillegutt 2015" matcher hverandre begge veier)."""
+    Matcher case-insensitivt og på ordgrense (se _word_boundary_match), slik at
+    både korte kallenavn ("G") og lengre flerords-lagnavn ("Lillegutt 2015 Ready")
+    kan brukes samtidig uten at de korte gir falske treff inni andre ord."""
     if not group_name or not family_context:
         return ""
     children = extract_child_team_names(family_context)
@@ -77,7 +101,11 @@ def match_child_from_group(group_name: str, family_context: str) -> str:
             name_lower = name.strip().lower()
             if not name_lower:
                 continue
-            if name_lower == group_lower or name_lower in group_lower or group_lower in name_lower:
+            if (
+                name_lower == group_lower
+                or _word_boundary_match(group_lower, name_lower)
+                or _word_boundary_match(name_lower, group_lower)
+            ):
                 matched.append(child)
                 break
     matched = list(dict.fromkeys(matched))  # unike, behold rekkefølge
