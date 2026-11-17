@@ -1699,7 +1699,26 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                 days_ahead=days_ahead,
                 start_date=week_start_dt
             )
-            events = _tag_calendar_events_with_spond(events, [dict(r) for r in rows], family_ctx)
+            # "rows" over er filtrert på NÅR meldingen ble LAGRET (siste 14 dager) -
+            # det ekskluderer faste/gjentakende Spond-arrangementer (f.eks. en fast
+            # ukentlig trening, eller en cup kunngjort for lenge siden) som ble synket
+            # for mer enn 14 dager siden, selv om selve AKTIVITETEN (eventStart) er
+            # denne uken. Slike arrangementer manglet derfor helt i grunnlaget for
+            # kalender-matchingen under, uansett hvor riktig selve matche-logikken var.
+            # Henter derfor i tillegg ALLE Spond-arrangementer der eventStart faller i
+            # DENNE UKEN, uavhengig av når de ble lagret.
+            week_end_dt = datetime(sunday.year, sunday.month, sunday.day, 23, 59, 59, tzinfo=OSLO_TZ)
+            async with pool.acquire() as conn2:
+                spond_event_rows = await conn2.fetch(
+                    "SELECT source, category, meta FROM messages"
+                    " WHERE user_id = $1 AND source = 'spond' AND meta ? 'eventStart'"
+                    " AND (meta->>'eventStart')::timestamptz >= $2"
+                    " AND (meta->>'eventStart')::timestamptz <= $3",
+                    uid, week_start_dt, week_end_dt
+                )
+            logger.info(f"[UKESOVERSIKT] Spond-arrangementer denne uken (uavh. av lagringsdato): {len(spond_event_rows)}")
+            spond_rows_for_tagging = [dict(r) for r in rows] + [dict(r) for r in spond_event_rows]
+            events = _tag_calendar_events_with_spond(events, spond_rows_for_tagging, family_ctx)
             calendar_section = f"KALENDER (hele uken, mandag {monday.day}. til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
             # Midlertidig debug-logg: viser EKSAKT hva AI-en fikk servert for kalenderen,
             # slik at vi kan se om "(Gjelder: ...)" faktisk ble satt riktig av koden,

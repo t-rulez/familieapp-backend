@@ -126,20 +126,20 @@ def _fetch_sync(url, username, password, calendar_filter, days_ahead, start_date
 
 
 def _to_datetime(dt) -> Optional[datetime]:
+    # OBS: testet å behandle naive (tidssone-løse) datoer fra iCal som Europe/Oslo
+    # i stedet for UTC, i et forsøk på å fjerne en antatt times-feil i matchingen
+    # mot Spond (se _tag_calendar_events_with_spond i main.py). Det gjorde det
+    # derimot MÅLBART VERRE i praksis (byttet om Gustav/Rasmus-matchingen på en
+    # reell test) - denne kalenderens naive tidspunkter var altså allerede riktige
+    # tolket som UTC. Beholder derfor den opprinnelige, enkle tolkningen.
     if dt is None:
         return None
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
-            # Naiv dato/tid fra iCal (ingen eksplisitt tidssone) betyr i praksis
-            # "flytende" lokal tid (RFC 5545) - for en norsk familiekalender er det
-            # Europe/Oslo, IKKE UTC. Å anta UTC her kunne gi opptil en times feil
-            # (sommertid) når tidspunktet senere sammenlignes mot Spond, som alltid
-            # oppgir ekte UTC - det kunne i sin tur gjøre at kalender/Spond-matching
-            # på tidspunkt (se _tag_calendar_events_with_spond i main.py) traff feil.
-            return dt.replace(tzinfo=OSLO_TZ)
+            return dt.replace(tzinfo=timezone.utc)
         return dt
     if isinstance(dt, date):
-        return datetime(dt.year, dt.month, dt.day, tzinfo=OSLO_TZ)
+        return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
     return None
 
 
