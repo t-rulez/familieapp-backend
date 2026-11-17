@@ -1737,6 +1737,7 @@ class WhatsappTopicRequest(BaseModel):
 async def ai_whatsapp_topic(req: WhatsappTopicRequest, user: CurrentUser):
     import json
     import asyncio
+    import re
 
     settings = await get_user_settings(user["id"])
     api_key = _get_api_key(settings)
@@ -1749,16 +1750,20 @@ async def ai_whatsapp_topic(req: WhatsappTopicRequest, user: CurrentUser):
 
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Begrenset til siste 30 dager - uten dette dukket det opp treff fra
+        # tilsvarende arrangement året før (f.eks. samme bursdagsfeiring i fjor),
+        # som bare forvirrer siden det ikke er det brukeren faktisk spør om nå.
         rows = await conn.fetch(
             "SELECT id, category, title, body, meta, timestamp"
             " FROM messages"
             " WHERE user_id = $1 AND source = 'whatsapp'"
+            " AND timestamp > NOW() - INTERVAL '30 days'"
             " ORDER BY timestamp DESC LIMIT 400",
             user["id"]
         )
 
     if not rows:
-        return {"found": False, "summary": "Fant ingen lagrede WhatsApp-meldinger.", "messages": []}
+        return {"found": False, "summary": "Fant ingen WhatsApp-meldinger om dette de siste 30 dagene.", "messages": []}
 
     msg_rows = []
     for row in rows:
@@ -1794,6 +1799,42 @@ async def ai_whatsapp_topic(req: WhatsappTopicRequest, user: CurrentUser):
     if len(msg_block) > 40000:
         msg_block = msg_block[-40000:]  # behold de nyeste hvis for mye tekst
 
+    # Koble temaet mot stedsnavn fra Spond, slik at f.eks. "Birger Cup" kan matches mot
+    # WhatsApp-meldinger som nevner "Vänersborg" (byen cupen faktisk foregår i) selv om
+    # selve cup-navnet aldri nevnes i chatten. Renser bort ledende emoji/klokkeslett fra
+    # stikkordet først, siden det ellers aldri vil treffe Spond-tittelen/-teksten.
+    clean_topic = re.sub(r'^[^\w]+', '', topic).strip()
+    clean_topic = re.sub(r'^([01]?\d|2[0-3])[:.][0-5]\d\s*', '', clean_topic).strip()
+    clean_topic = re.sub(r'^kl\.?\s*\d{1,2}\s*', '', clean_topic, flags=re.IGNORECASE).strip()
+
+    spond_context = ""
+    if clean_topic:
+        async with pool.acquire() as conn:
+            spond_rows = await conn.fetch(
+                "SELECT title, body, meta FROM messages"
+                " WHERE user_id = $1 AND source = 'spond'"
+                " AND (title ILIKE $2 OR body ILIKE $2)"
+                " ORDER BY timestamp DESC LIMIT 3",
+                user["id"], f"%{clean_topic}%"
+            )
+        locations = []
+        for r in spond_rows:
+            rmeta = r["meta"]
+            if rmeta and not isinstance(rmeta, dict):
+                try:
+                    rmeta = json.loads(rmeta)
+                except Exception:
+                    rmeta = {}
+            loc = (rmeta or {}).get("location")
+            if loc and loc not in locations:
+                locations.append(loc)
+        if locations:
+            spond_context = (
+                f" I kalenderen/Spond er dette registrert med sted: {', '.join(locations)}. "
+                "WhatsApp-meldinger som nevner dette stedet (by, hall, klubb e.l.) kan også "
+                "være relevante for temaet, selv om de ikke nevner selve navnet på aktiviteten."
+            )
+
     system = (
         "Du hjelper en familie med å finne WhatsApp-meldinger knyttet til et bestemt tema/stikkord "
         "fra familiekalenderen, f.eks. 'R Bursdag Mega Fun'. Under følger en nummerert liste med "
@@ -1801,14 +1842,19 @@ async def ai_whatsapp_topic(req: WhatsappTopicRequest, user: CurrentUser):
         "kronologisk fra eldst til nyest.\n\n"
         "Finn ALLE meldingene som faktisk handler om temaet. Familiens forbokstaver brukes ofte i "
         "stikkord og kan dukke opp i meldingene også: R=Rasmus, G=Gustav, K=Kristin, T=Truls.\n\n"
+        "VIKTIG om kronologi: meldingene kan gjelde noe som har endret seg underveis (f.eks. "
+        "endret tidspunkt, sted eller avtale). Vurder meldingene kronologisk og la den NYESTE "
+        "informasjonen gjelde foran eldre/utdaterte meldinger - presenter den nyeste, gjeldende "
+        "statusen FØRST i oppsummeringen. Eventuell eldre bakgrunn kan nevnes kort etterpå, men "
+        "skal aldri fremstå som det gjeldende hvis en senere melding sier noe annet.\n\n"
         "Svar KUN med et JSON-objekt, uten noe tekst før eller etter:\n"
-        '{"found": true/false, "message_indices": [0, 4, 7], "summary": "kort oppsummering på norsk av '
-        'hva dialogen handler om, eventuell konklusjon/avtale, og hvem som sa hva"}\n\n'
+        '{"found": true/false, "message_indices": [0, 4, 7], "summary": "kort oppsummering på norsk, '
+        'nyeste/gjeldende informasjon først, med eventuell konklusjon/avtale og hvem som sa hva"}\n\n'
         "Hvis ingen meldinger er relevante: found=false, message_indices=[], og en kort forklarende "
         "summary (f.eks. 'Fant ingen WhatsApp-meldinger om dette temaet').\n"
         "ALDRI finn opp meldinger eller innhold som ikke står i listen over."
     )
-    user_content = f"TEMA: {topic}\n\nWHATSAPP-MELDINGER:\n{msg_block}"
+    user_content = f"TEMA: {topic}.{spond_context}\n\nWHATSAPP-MELDINGER:\n{msg_block}"
 
     for attempt in range(3):
         try:
