@@ -77,54 +77,119 @@ last_sync: Optional[str] = None
 # Delt regel brukt i alle AI-prompter (ukesoversikt, AI-assistent, kveldssammendrag):
 # kalenderen inneholder ofte en generisk kopi av Spond-aktiviteter uten lagnavn.
 # Spond-meldingen selv VET hvilket lag/barn det gjelder, og skal derfor overstyre.
-def _spond_child_tag(m: dict, family_ctx: str) -> str:
-    """Returnerer "Gjelder: <barn>" for en Spond-melding, hvis gruppenavnet (meta.group,
-    med category som fallback) tydelig matcher ett barns lagnavn i familieprofilen -
-    ellers "". Kjøres LIVE ved hvert søk/spørring (ikke ved innlesing fra Spond), slik
-    at den alltid bruker den nåværende familieprofilen - ingen "gammel data"-problem
-    hvis et lagnavn endres, og ingen egen backfill-jobb trengs."""
-    if m.get("source") != "spond" or not family_ctx:
-        return ""
+def _spond_meta(m: dict) -> dict:
+    """Henter ut meta-feltet fra en meldings-rad som et dict, uansett om det kom fra
+    databasen som json-tekst eller allerede som dict."""
     meta = m.get("meta") or {}
     if isinstance(meta, str):
         try:
             import json as _json
-            meta = _json.loads(meta)
+            return _json.loads(meta)
         except Exception:
-            meta = {}
-    group_name = (meta or {}).get("group", "") or m.get("category", "")
+            return {}
+    return meta or {}
+
+
+def _spond_child_name(m: dict, family_ctx: str) -> str:
+    """Returnerer BARE barnets navn (uten "Gjelder: "-prefiks) for en Spond-melding,
+    hvis gruppenavnet (meta.group, med category som fallback) tydelig matcher ett
+    barns lagnavn i familieprofilen - ellers "". Kjøres LIVE ved hvert søk/spørring
+    (ikke ved innlesing fra Spond), slik at den alltid bruker den nåværende
+    familieprofilen - ingen "gammel data"-problem hvis et lagnavn endres, og ingen
+    egen backfill-jobb trengs."""
+    if m.get("source") != "spond" or not family_ctx:
+        return ""
+    meta = _spond_meta(m)
+    group_name = meta.get("group", "") or m.get("category", "")
     from family_profile import match_child_from_group
-    child = match_child_from_group(group_name, family_ctx)
+    return match_child_from_group(group_name, family_ctx)
+
+
+def _spond_child_tag(m: dict, family_ctx: str) -> str:
+    """Returnerer "Gjelder: <barn>" (se _spond_child_name), eller "" hvis ingen
+    tydelig match."""
+    child = _spond_child_name(m, family_ctx)
     return f"Gjelder: {child}" if child else ""
 
 
+def _spond_event_start(m: dict) -> Optional[datetime]:
+    """Starttidspunktet til et Spond-arrangement (meta.eventStart), hvis det finnes.
+    Vanlige chat-meldinger fra Spond har ikke dette feltet - bare arrangementer."""
+    ts = _spond_meta(m).get("eventStart")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], family_ctx: str) -> list[dict]:
+    """Merker hver kalenderoppføring med hvilket barn den gjelder (feltet "child"),
+    HVIS den tidsmessig faller sammen med et Spond-arrangement som selv er tydelig
+    tagget til ett barn (via family_profile.py).
+
+    Dette gjøres HER, i kode, og ALDRI av AI-en: tidligere ba vi AI-en selv
+    gjenkjenne at en kalenderoppføring og en Spond-melding var "samme aktivitet" og
+    overføre riktig barn - det førte til ustabile og inkonsekvente resultater
+    (samme type feil som da vi hardkodet laginfo, bare flyttet til prompten i
+    stedet for koden). Nå er svaret allerede riktig når teksten når AI-en, som bare
+    skal lese av "(Gjelder: <barn>)" direkte - se format_events_for_ai og
+    SPOND_CALENDAR_RULE.
+
+    Matcher KUN på tidspunkt (innenfor et vindu), ikke på tittel/tekst - tittelen
+    alene (f.eks. bare "Trening") er ikke pålitelig for å skille mellom barna."""
+    MATCH_WINDOW_MINUTES = 90
+
+    tagged_spond = []
+    for m in spond_rows:
+        if m.get("source") != "spond":
+            continue
+        child = _spond_child_name(m, family_ctx)
+        if not child:
+            continue
+        start = _spond_event_start(m)
+        if not start:
+            continue
+        tagged_spond.append((start, child))
+
+    if not tagged_spond:
+        return events
+
+    result = []
+    for e in events:
+        ev = dict(e)
+        ev_start = None
+        if e.get("start"):
+            try:
+                ev_start = datetime.fromisoformat(e["start"])
+            except Exception:
+                ev_start = None
+        if ev_start:
+            for sp_start, child in tagged_spond:
+                delta = abs((ev_start - sp_start).total_seconds()) / 60
+                if delta <= MATCH_WINDOW_MINUTES:
+                    ev["child"] = child
+                    break
+        result.append(ev)
+    return result
+
+
 SPOND_CALENDAR_RULE = (
-    "VIKTIG REGEL om kalender vs. Spond: Felles-kalenderen inneholder noen ganger kopier av "
-    "aktiviteter som opprinnelig kommer fra Spond (idrettslag/foreldregrupper). Kalenderkopien "
-    "er ofte generisk og mangler informasjon om hvilket lag eller barn aktiviteten faktisk "
-    "gjelder.\n"
-    "NOEN Spond-meldinger/arrangementer under har allerede en linje som sier EKSAKT hvem "
-    "aktiviteten gjelder, skrevet nøyaktig slik: 'Gjelder: <barn>'. Denne linjen er regnet ut "
-    "av et program (ikke av deg) ved å matche det EKSAKTE gruppenavnet mot familieprofilen, og "
-    "er alltid korrekt når den finnes - du skal ALDRI prøve å regne ut eller overstyre dette "
-    "selv ved å tolke tittel, kategori eller gruppenavn på nytt. Bruk ALLTID 'Gjelder: <barn>' "
-    "direkte når den finnes, uten videre resonnering.\n"
-    "Fremgangsmåte, i denne rekkefølgen:\n"
-    "  1. Har Spond-meldingen/arrangementet en 'Gjelder: <barn>'-linje? Da gjelder aktiviteten "
-    "KUN det barnet - ferdig, ikke vurder noe mer.\n"
-    "  2. Finnes det en KALENDER-oppføring som er samme aktivitet (samme klokkeslett, og "
-    "samme eller lignende tittel/type) som en Spond-melding/arrangement med en "
-    "'Gjelder: <barn>'-linje? Da gjelder KALENDER-oppføringen det SAMME barnet som "
-    "Spond-oppføringen - kalenderkopien skal ALDRI behandles som om den er ukjent eller "
-    "gjelder alle barna bare fordi den generiske kalenderteksten ikke selv nevner noe lag.\n"
-    "  3. Hvis en Spond-melding/arrangement IKKE har noen 'Gjelder: <barn>'-linje (den "
-    "mangler helt, den er ikke bare tom), er det ikke mulig å avgjøre hvem den gjelder - "
-    "ikke gjett basert på tittel, kategori eller noe annet, og det samme gjelder da en "
-    "eventuell matchende kalenderkopi av den. Marker heller som usikkert/felles enn å "
-    "plassere det på feil barn.\n"
-    "  4. Bare hvis en aktivitet KUN finnes i kalenderen, uten noen tilsvarende "
-    "Spond-oppføring i det hele tatt, kan du vurdere om tittelen alene tydelig nevner et "
-    "navn - ellers er den felles/ukjent.\n"
+    "VIKTIG REGEL om kalender vs. Spond, og om hvem en aktivitet gjelder: dette er ALLEREDE "
+    "regnet ut av et program før teksten under ble satt sammen - IKKE noe du selv skal tolke, "
+    "gjette eller overstyre.\n"
+    "  - En Spond-melding/arrangement som har en linje 'Gjelder: <barn>' gjelder KUN det "
+    "barnet. Mangler linjen helt, er det ikke mulig å si hvem det gjelder - behandle den da "
+    "som felles/ukjent, gjett ALDRI basert på tittel, kategori eller noe annet.\n"
+    "  - En KALENDER-oppføring som har '(Gjelder: <barn>)' i teksten (dette er lagt til fordi "
+    "programmet har funnet at den faller sammen i tid med en tagget Spond-oppføring) gjelder "
+    "KUN det barnet. En kalenderoppføring UTEN denne taggen er felles/ukjent, selv om du tror "
+    "den kan være en kopi av en Spond-aktivitet - ikke prøv å koble den til noe selv.\n"
+    "  - En KALENDER-oppføring kan vare over flere dager (teksten viser da både start- og "
+    "sluttdag/-tid, f.eks. 'fredag 20. nov kl. 17:00 til søndag 22. nov kl. 18:00'). Slike "
+    "arrangementer skal vises på HVER ENKELT dag i det tidsrommet (fredag OG lørdag OG "
+    "søndag i eksempelet), ikke bare på startdagen.\n"
     "VIKTIG om klokkeslett: bruk ALLTID klokkeslettet NØYAKTIG som det står i kilden (kalender "
     "eller Spond) - f.eks. '16:50' skal forbli '16:50', ALDRI rundes av til '17:00' eller annet "
     "'pent' tidspunkt. Kopier minuttallet ordrett, ikke avrund eller anslå."
@@ -468,6 +533,7 @@ async def send_evening_summary(user: dict):
                 calendar_filter=settings.get("caldav_calendars", ""),
                 days_ahead=3
             )
+            events = _tag_calendar_events_with_spond(events, relevant, family_ctx)
             calendar_section = f"KALENDER:\n{format_events_for_ai(events)}\n\n"
         except Exception as e:
             logger.warning(f"[EVENING] Kalender-henting feilet: {e}")
@@ -1442,6 +1508,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 calendar_filter=settings.get("caldav_calendars", ""),
                 days_ahead=14
             )
+            events = _tag_calendar_events_with_spond(events, relevant, req.family_context)
             calendar_section = f"KALENDER (neste 14 dager):\n{format_events_for_ai(events)}\n\n"
         except Exception as e:
             logger.warning(f"Kalender-henting feilet: {e}")
@@ -1548,7 +1615,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT source, source_label, category, title, tldr, body,"
-            " time_label AS time, timestamp"
+            " time_label AS time, timestamp, meta"
             " FROM messages WHERE user_id = $1 AND timestamp > NOW() - INTERVAL '14 days'"
             " ORDER BY timestamp DESC LIMIT 150",
             uid
@@ -1597,6 +1664,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                 days_ahead=days_ahead,
                 start_date=week_start_dt
             )
+            events = _tag_calendar_events_with_spond(events, [dict(r) for r in rows], family_ctx)
             calendar_section = f"KALENDER (hele uken, mandag {monday.day}. til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
         except Exception as e:
             logger.warning(f"[UKESOVERSIKT] Kalender-henting feilet: {e}")

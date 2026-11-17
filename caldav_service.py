@@ -93,10 +93,15 @@ def _fetch_sync(url, username, password, calendar_filter, days_ahead, start_date
                                     f"{start_dt.strftime('%H:%M')}"
                                 )
 
+                            # Sluttdato/-tid tas med slik at flerdagers-arrangementer (f.eks.
+                            # en cup som varer fredag-søndag) kan vises på ALLE dagene de
+                            # varer, ikke bare på startdagen - uten denne forsvinner
+                            # resten av arrangementet helt fra oversikten.
                             event = {
                                 "summary": summary,
                                 "calendar": cal_name,
                                 "start": start_dt.isoformat(),
+                                "end": end_dt.isoformat() if end_dt else None,
                                 "time_str": time_str,
                                 "location": location,
                                 "description": description[:200] if description else ""
@@ -131,15 +136,47 @@ def _to_datetime(dt) -> Optional[datetime]:
 
 
 def format_events_for_ai(events: list[dict]) -> str:
-    """Formater kalenderoppføringer som tekst for AI-kontekst."""
+    """Formater kalenderoppføringer som tekst for AI-kontekst.
+
+    Hvis et arrangement varer over flere dager (sluttdato ≠ startdato), skrives
+    sluttidspunktet også ut i teksten (f.eks. "fredag 20. nov kl. 17:00 til søndag
+    22. nov kl. 18:00") - slik at AI-en vet at arrangementet skal vises på ALLE
+    dagene det varer, ikke bare på startdagen.
+
+    Hvis en oppføring har fått et "child"-felt (satt i kode, se
+    _tag_calendar_events_with_spond i main.py - IKKE noe AI-en selv skal vurdere),
+    skrives dette ut som "(Gjelder: <barn>)" i samme linje. Dette er allerede
+    fastslått og skal brukes direkte, uten videre tolkning."""
     if not events:
         return "Ingen kommende kalenderoppføringer."
 
+    days_no = ["mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag", "søndag"]
+    months_no = ["januar", "februar", "mars", "april", "mai", "juni",
+                 "juli", "august", "september", "oktober", "november", "desember"]
+
     lines = []
     for e in events:
-        line = f"- {e['time_str']}: {e['summary']}"
+        time_str = e["time_str"]
+        start_iso = e.get("start")
+        end_iso = e.get("end")
+        if start_iso and end_iso:
+            try:
+                start_dt = datetime.fromisoformat(start_iso)
+                end_dt = datetime.fromisoformat(end_iso)
+                if end_dt.date() != start_dt.date():
+                    end_str = (
+                        f"{days_no[end_dt.weekday()]} {end_dt.day}. "
+                        f"{months_no[end_dt.month-1]} kl. {end_dt.strftime('%H:%M')}"
+                    )
+                    time_str = f"{time_str} til {end_str}"
+            except Exception:
+                pass
+
+        line = f"- {time_str}: {e['summary']}"
         if e.get("location"):
             line += f" ({e['location']})"
+        if e.get("child"):
+            line += f" (Gjelder: {e['child']})"
         if e.get("calendar"):
             line += f" [Kalender: {e['calendar']}]"
         if e.get("description"):
