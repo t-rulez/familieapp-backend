@@ -153,6 +153,10 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
             continue
         tagged_spond.append((start, child))
 
+    logger.info(
+        f"[UKESOVERSIKT] Spond-rader med kjent barn+tidspunkt (brukes til kalender-matching): "
+        f"{[(c, s.isoformat()) for s, c in tagged_spond]}"
+    )
     if not tagged_spond:
         return events
 
@@ -1671,6 +1675,12 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             )
             events = _tag_calendar_events_with_spond(events, [dict(r) for r in rows], family_ctx)
             calendar_section = f"KALENDER (hele uken, mandag {monday.day}. til søndag {sunday.day}.):\n{format_events_for_ai(events)}\n\n"
+            # Midlertidig debug-logg: viser EKSAKT hva AI-en fikk servert for kalenderen,
+            # slik at vi kan se om "(Gjelder: ...)" faktisk ble satt riktig av koden,
+            # eller om problemet ligger i hvordan AI-en leser/bruker teksten videre.
+            n_tagged = sum(1 for e in events if e.get("child"))
+            logger.info(f"[UKESOVERSIKT] Kalender: {len(events)} oppføringer, {n_tagged} tagget med barn")
+            logger.info(f"[UKESOVERSIKT] Kalender-tekst til AI:\n{format_events_for_ai(events)}")
         except Exception as e:
             logger.warning(f"[UKESOVERSIKT] Kalender-henting feilet: {e}")
 
