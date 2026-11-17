@@ -137,9 +137,14 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     skal lese av "(Gjelder: <barn>)" direkte - se format_events_for_ai og
     SPOND_CALENDAR_RULE.
 
-    Matcher KUN på tidspunkt (innenfor et vindu), ikke på tittel/tekst - tittelen
-    alene (f.eks. bare "Trening") er ikke pålitelig for å skille mellom barna."""
-    MATCH_WINDOW_MINUTES = 90
+    Matcher KUN på tidspunkt (innenfor et SMALT vindu), ikke på tittel/tekst -
+    tittelen alene (f.eks. bare "Trening") er ikke pålitelig for å skille mellom
+    barna. Vinduet må være smalt (se MATCH_WINDOW_MINUTES) - et bredt vindu (testet
+    med 90 min) ga falske treff: en helt urelatert avtale samme formiddag (en
+    veterinær-vaksinasjon, en av foreldrenes egen trening) ble feilaktig tagget med
+    et barn bare fordi den lå i nærheten i tid av en barneaktivitet. Blant flere
+    treff innenfor vinduet velges alltid det NÆRMESTE i tid, ikke det første funnet."""
+    MATCH_WINDOW_MINUTES = 25
 
     tagged_spond = []
     for m in spond_rows:
@@ -170,12 +175,33 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
             except Exception:
                 ev_start = None
         if ev_start:
+            best = None
             for sp_start, child in tagged_spond:
                 delta = abs((ev_start - sp_start).total_seconds()) / 60
-                if delta <= MATCH_WINDOW_MINUTES:
-                    ev["child"] = child
-                    break
+                if delta <= MATCH_WINDOW_MINUTES and (best is None or delta < best[0]):
+                    best = (delta, child)
+            if best:
+                ev["child"] = best[1]
         result.append(ev)
+
+    # To kalenderoppføringer med NØYAKTIG samme tittel samme dag (f.eks. to
+    # påfølgende treningsøkter samme kveld, i to tidsluker) er med overveldende
+    # sannsynlighet samme gjentakende aktivitet - gi dem samme barn-tag selv om
+    # bare én av dem lå nær nok et Spond-tidspunkt til å bli direkte matchet. Dette
+    # er EKSAKT tekstlikhet (ikke en gjetning på innhold), og kompenserer for at det
+    # smale tidsvinduet over ellers ville mistet den andre økten.
+    by_key: dict[tuple, list[dict]] = {}
+    for ev in result:
+        start = ev.get("start") or ""
+        key = (start[:10], ev.get("summary", "").strip().lower())
+        by_key.setdefault(key, []).append(ev)
+    for group in by_key.values():
+        children = {ev["child"] for ev in group if ev.get("child")}
+        if len(children) == 1:
+            only_child = next(iter(children))
+            for ev in group:
+                ev.setdefault("child", only_child)
+
     return result
 
 

@@ -2,10 +2,12 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone, date
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 ICLOUD_URL = "https://caldav.icloud.com"
+OSLO_TZ = ZoneInfo("Europe/Oslo")
 
 
 async def fetch_calendar_events(
@@ -128,10 +130,16 @@ def _to_datetime(dt) -> Optional[datetime]:
         return None
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
+            # Naiv dato/tid fra iCal (ingen eksplisitt tidssone) betyr i praksis
+            # "flytende" lokal tid (RFC 5545) - for en norsk familiekalender er det
+            # Europe/Oslo, IKKE UTC. Å anta UTC her kunne gi opptil en times feil
+            # (sommertid) når tidspunktet senere sammenlignes mot Spond, som alltid
+            # oppgir ekte UTC - det kunne i sin tur gjøre at kalender/Spond-matching
+            # på tidspunkt (se _tag_calendar_events_with_spond i main.py) traff feil.
+            return dt.replace(tzinfo=OSLO_TZ)
         return dt
     if isinstance(dt, date):
-        return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+        return datetime(dt.year, dt.month, dt.day, tzinfo=OSLO_TZ)
     return None
 
 
