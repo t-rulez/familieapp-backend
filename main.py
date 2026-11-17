@@ -1717,6 +1717,9 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                     uid, week_start_dt, week_end_dt
                 )
             logger.info(f"[UKESOVERSIKT] Spond-arrangementer denne uken (uavh. av lagringsdato): {len(spond_event_rows)}")
+            from family_profile import extract_child_team_names
+            logger.info(f"[UKESOVERSIKT] family_ctx (repr, {len(family_ctx or '')} tegn): {family_ctx!r}")
+            logger.info(f"[UKESOVERSIKT] Utpakkede lagnavn per person: {extract_child_team_names(family_ctx)!r}")
             for r in spond_event_rows:
                 _m = dict(r)
                 _meta = _spond_meta(_m)
