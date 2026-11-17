@@ -177,8 +177,6 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
         f"[UKESOVERSIKT] Spond-rader med kjent barn+tidspunkt (brukes til kalender-matching): "
         f"{[(c, s.isoformat()) for s, c in tagged_spond]}"
     )
-    if not tagged_spond:
-        return events
 
     # Brukes til unntak 1 ovenfor: ALLE 4 familiemedlemmenes navn/kallenavn fra
     # profilen (ikke bare barna - "K" og "T" for Kristin/Truls er også definert
@@ -187,29 +185,46 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     from family_profile import extract_child_team_names, _word_boundary_match
     all_family_names = extract_child_team_names(family_ctx)
 
-    def _title_names_someone(summary: str) -> bool:
+    def _title_named_person(summary: str) -> Optional[str]:
+        """Finner HVEM tittelen eksplisitt navngir, basert på de samme anførselstegn-
+        navnene/kallenavnene som family_profile.py bruker - eller None hvis tittelen
+        ikke navngir noen, ELLER hvis den tvetydig matcher FLERE personer samtidig
+        (f.eks. "R & G gymtøy", som bevisst skal gjelde begge - da er det ingen
+        ENKELT person å sette direkte, og vi lar AI-en håndtere det som i dag).
+        Returnerer PERSONEN DIREKTE (ikke bare "funnet/ikke funnet") fordi et
+        kallenavn som "G17" er for upresist for AI-en å tolke riktig på egen hånd -
+        den har tidligere lest "G17" som "Gustav" (pga. "G"), når det i
+        familieprofilen faktisk er Rasmus sitt EGNE, fulle lagnavn. Siden vi uansett
+        allerede har gjort det eksakte oppslaget her, er det tryggere å sette svaret
+        direkte enn å overlate en tvetydig forkortelse til AI-en."""
         summary_lower = (summary or "").strip().lower()
         if not summary_lower:
-            return False
+            return None
+        matched_people = []
         for _person, _names in all_family_names.items():
             for _name in _names:
                 _name_lower = _name.strip().lower()
                 if _name_lower and _word_boundary_match(summary_lower, _name_lower):
-                    return True
-        return False
+                    matched_people.append(_person)
+                    break
+        matched_people = list(dict.fromkeys(matched_people))
+        return matched_people[0] if len(matched_people) == 1 else None
 
     result = []
     for e in events:
         ev = dict(e)
 
-        # Unntak 1: tittelen nevner allerede et navn/kallenavn fra familieprofilen
-        # (f.eks. "K Ledermøte" -> "K" = Kristin) - da skal vi ALDRI la en
-        # tilfeldig dato/tid-sammenfall med en ANNEN persons aktivitet overstyre
-        # dette. AI-en leser selv det eksplisitte navnet direkte fra tittelen (det
-        # gjør den allerede riktig for f.eks. "Truls innebandy", "Kristin trening"),
-        # så vi lar den oppføringen stå helt UTEN kode-tag i stedet for å risikere
-        # en feil tag.
-        if _title_names_someone(e.get("summary", "")):
+        # Unntak 1: tittelen nevner allerede ETT bestemt navn/kallenavn fra
+        # familieprofilen (f.eks. "K Ledermøte" -> Kristin, "Bandytrening G17" ->
+        # Rasmus, siden "G17" er Rasmus sitt eget lagnavn i profilen). Da setter vi
+        # "child" DIREKTE til den personen - og lar ALDRI en tilfeldig dato/tid-
+        # sammenfall med en ANNEN persons aktivitet overstyre dette.
+        named_person = _title_named_person(e.get("summary", ""))
+        if named_person:
+            ev["child"] = named_person
+            result.append(ev)
+            continue
+        if not tagged_spond:
             result.append(ev)
             continue
 
@@ -325,7 +340,12 @@ SPOND_CALENDAR_RULE = (
     "'Julebord', 'Foreldremøte' eller andre familie-/foreldre-arrangementer.\n"
     "VIKTIG om klokkeslett: bruk ALLTID klokkeslettet NØYAKTIG som det står i kilden (kalender "
     "eller Spond) - f.eks. '16:50' skal forbli '16:50', ALDRI rundes av til '17:00' eller annet "
-    "'pent' tidspunkt. Kopier minuttallet ordrett, ikke avrund eller anslå."
+    "'pent' tidspunkt. Kopier minuttallet ordrett, ikke avrund eller anslå.\n"
+    "VIKTIG om navn på aktiviteter: bruk ALLTID aktivitetens tittel/navn EKSAKT som den står i "
+    "kilden. ALDRI gjett deg til, forkort til, eller bytt den ut med navnet på en annen, lignende "
+    "aktivitet - f.eks. er 'Tess Skiold Bandycup' og 'Birger Cup' to HELT FORSKJELLIGE cuper, "
+    "selv om begge er bandy-cuper; bland dem aldri sammen eller bruk det ene navnet på det andre "
+    "arrangementets dato bare fordi de ligner på hverandre."
 )
 
 # ─── Auth-avhengighet ─────────────────────────────────────────────────────────
@@ -1895,6 +1915,15 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "Lag en ukesoversikt fordelt på person og dag, for disse fire personene: "
         f"{', '.join(WEEK_PEOPLE)} (Gustav og Rasmus er barn, Kristin og Truls er foreldre).\n"
         "For hver dag mandag-søndag og hver person skal du dele stikkordene i to grupper:\n"
+        f"VIKTIG grunnregel for skoleinnhold: du lager nå ukesoversikt for UKEN mandag "
+        f"{monday.day}.{monday.month} til søndag {sunday.day}.{sunday.month}. En Showbie-ukeplan "
+        "gjelder ALLTID bare den ene konkrete uken/datoene den selv beskriver. Mottas en ny "
+        "ukeplan litt sent, kan den nyeste ukeplanen i MELDINGER i virkeligheten gjelde en ANNEN, "
+        "tidligere uke enn den du nå lager oversikt for (typisk fordi ukeplanen for DENNE uken "
+        "ikke er lagt ut/mottatt ennå). Sjekk derfor om ukeplanens egne datoer/ukenummer faktisk "
+        "stemmer med uken over - stemmer de IKKE, skal du ALDRI gjenbruke den gamle ukeplanens "
+        "lekser/timeplan som om den gjaldt denne uken. La skole-feltet stå tomt for de dagene i "
+        "stedet (ikke finn opp en tekst om at ukeplanen mangler - bare la feltet være tomt).\n"
         "1) \"skole\": ALT som gjelder skolearbeid og skole - lekser, prøver, innleveringer, "
         "ting som må tas med, turdag, tema-/aktivitetsdag, skolearrangement, foreldremøte, "
         "utflukt og lignende, NÅR DET KOMMER FRA KILDER UNDER \"MELDINGER\" (typisk Showbie "
