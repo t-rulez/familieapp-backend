@@ -564,7 +564,7 @@ async def send_evening_summary(user: dict):
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-5", "max_tokens": 150, "temperature": 0,
+            json={"model": "claude-sonnet-5", "max_tokens": 150,
                   "system": system, "messages": [{"role": "user", "content": question}]}
         )
         if resp.status_code != 200:
@@ -1554,7 +1554,7 @@ async def ai_chat(req: AiChatRequest, user: CurrentUser):
                 res = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "temperature": 0, "system": system, "messages": messages}
+                    json={"model": "claude-sonnet-5", "max_tokens": 1200, "system": system, "messages": messages}
                 )
             if res.status_code in (429, 529):
                 wait = [5, 15, 30][attempt]
@@ -1687,6 +1687,16 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "allerede har passert eller er gjennomført (f.eks. en trening tidligere i dag, eller "
         "tidligere i uken). Ikke utelat noe bare fordi det ligger bakover i tid denne uken.\n"
         f"{SPOND_CALENDAR_RULE}\n\n"
+        "EKSEMPEL på hvordan dette brukes (oppdiktet, kun for å illustrere mønsteret):\n"
+        "  Hvis MELDINGER inneholder '[Spond - Lillegutt 2015 Ready - ...] Trening\\n  "
+        "Gjelder: Gustav', skal denne treningen KUN vises under Gustav - aldri under Rasmus, "
+        "selv om tittelen bare sier 'Trening'.\n"
+        "  Hvis KALENDER inneholder '- torsdag 19. nov kl. 16:50: Trening Eckbobanen "
+        "(Gjelder: Gustav) [Kalender: Familie]', skal også DENNE kun vises under Gustav - "
+        "det er samme regel, bare på en kalenderoppføring i stedet for en Spond-melding.\n"
+        "  Hvis KALENDER i stedet inneholder '- fredag 20. nov kl. 18:00: Julebord "
+        "[Kalender: Familie]' (ingen '(Gjelder: ...)' i det hele tatt), skal denne vises "
+        "under BÅDE Kristin og Truls, ikke under Gustav eller Rasmus, og ikke utelates.\n\n"
         f"{('FAMILIEPROFIL: ' + family_ctx) if family_ctx else ''}\n"
         f"{('LAERT KONTEKST: ' + auto_ctx) if auto_ctx else ''}\n\n"
         f"{calendar_section}"
@@ -1752,18 +1762,15 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     import json
     # Timeout økt fra 60s: med mye kontekst (meldinger + kalender) kan selve
     # Claude-kallet ta god tid, og 60s ga httpcore.ReadTimeout -> 500.
-    # "thinking" er fjernet igjen: når "thinking" er på, tvinger Anthropic-APIet
-    # temperature til 1 (kan ikke overstyres) - det ga synlig ulike svar fra gang til
-    # gang på denne oppgaven (hvilket barn en aktivitet gjelder, hvilken dag leksene
-    # ligger på, osv), selv uten noen endring i grunnlagsdataene mellom kallene.
-    # Oppgaven er i bunn og grunn mekanisk kategorisering - det vil vi ha konsekvent,
-    # ikke kreativt - så vi bruker "temperature": 0 i stedet, uten "thinking".
+    # "temperature" er IKKE en gyldig parameter for denne modellen (API-et svarer
+    # 400 "temperature is deprecated for this model") - kan altså ikke brukes til å
+    # gjøre svaret mer konsekvent. "thinking" er likevel fjernet (se under).
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10)) as client:
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": "claude-sonnet-5", "max_tokens": 8000, "temperature": 0,
+                json={"model": "claude-sonnet-5", "max_tokens": 8000,
                       "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
             )
     except httpx.TimeoutException:
