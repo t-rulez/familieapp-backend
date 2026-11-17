@@ -169,12 +169,37 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     for e in events:
         ev = dict(e)
         ev_start = None
+        ev_end = None
         if e.get("start"):
             try:
                 ev_start = datetime.fromisoformat(e["start"])
             except Exception:
                 ev_start = None
-        if ev_start:
+        if e.get("end"):
+            try:
+                ev_end = datetime.fromisoformat(e["end"])
+            except Exception:
+                ev_end = None
+
+        is_long_or_allday = (
+            ev_start and ev_end and (ev_end - ev_start) > timedelta(hours=6)
+        )
+
+        if is_long_or_allday:
+            # Heldags-/flerdagers kalenderoppføring (f.eks. en cup fredag-søndag,
+            # ofte lagret som midnatt-til-midnatt i kalenderen): et vanlig smalt
+            # minutt-vindu er meningsløst her, siden det faktiske Spond-tidspunktet
+            # (f.eks. kl. 16:00 fredag) kan ligge mange timer unna kalenderens
+            # midnatts-klokkeslett for SAMME dag. Match i stedet på DATO: finner
+            # kalenderoppføringen et Spond-tidspunkt som faller på en av dagene den
+            # varer, og det peker entydig på ETT barn, brukes det.
+            children_in_range = set()
+            for sp_start, child in tagged_spond:
+                if ev_start.date() <= sp_start.date() <= ev_end.date():
+                    children_in_range.add(child)
+            if len(children_in_range) == 1:
+                ev["child"] = next(iter(children_in_range))
+        elif ev_start:
             best = None
             for sp_start, child in tagged_spond:
                 delta = abs((ev_start - sp_start).total_seconds()) / 60
