@@ -137,14 +137,29 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     skal lese av "(Gjelder: <barn>)" direkte - se format_events_for_ai og
     SPOND_CALENDAR_RULE.
 
-    Matcher KUN på tidspunkt (innenfor et SMALT vindu), ikke på tittel/tekst -
+    Matcher i hovedsak på TIDSPUNKT (innenfor et SMALT vindu), ikke på tittel/tekst -
     tittelen alene (f.eks. bare "Trening") er ikke pålitelig for å skille mellom
-    barna. Vinduet må være smalt (se MATCH_WINDOW_MINUTES) - et bredt vindu (testet
+    SØSKEN. Vinduet må være smalt (se MATCH_WINDOW_MINUTES) - et bredt vindu (testet
     med 90 min) ga falske treff: en helt urelatert avtale samme formiddag (en
     veterinær-vaksinasjon, en av foreldrenes egen trening) ble feilaktig tagget med
     et barn bare fordi den lå i nærheten i tid av en barneaktivitet. Blant flere
-    treff innenfor vinduet velges alltid det NÆRMESTE i tid, ikke det første funnet."""
+    treff innenfor vinduet velges alltid det NÆRMESTE i tid, ikke det første funnet.
+
+    To unntak/justeringer, begge beskrevet der de brukes under:
+      1. Har kalendertittelen et EKSPLISITT navn/kallenavn fra familieprofilen
+         (f.eks. "K" for Kristin), hopper vi over all automatisk dato/tid-matching
+         for den oppføringen - et eksplisitt navn i teksten er et sterkere og mer
+         pålitelig signal enn en tilfeldig dato/tid-sammenfall med en helt annen
+         persons aktivitet.
+      2. Et generisk idretts-/aktivitetsord i tittelen (f.eks. "trening", "kamp",
+         "serie", "cup") åpner for et litt VIDERE tidsvindu enn standard - fordi en
+         idrettsaktivitet i kalenderen og dens Spond-motpart ofte har et par-tre
+         tiår minutters avvik i praksis (oppmøtetid vs. faktisk kampstart), mens en
+         ikke-idretts-avtale (f.eks. en vaksine) ALDRI får dette videre vinduet, og
+         dermed ikke kan bli en falsk match bare fordi den ligger i nærheten i tid."""
     MATCH_WINDOW_MINUTES = 25
+    EXTENDED_MATCH_WINDOW_MINUTES = 35
+    _SPORTS_KEYWORDS = ("trening", "kamp", "serie", "cup", "runde", "turnering", "spill")
 
     tagged_spond = []
     for m in spond_rows:
@@ -165,9 +180,39 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     if not tagged_spond:
         return events
 
+    # Brukes til unntak 1 ovenfor: ALLE 4 familiemedlemmenes navn/kallenavn fra
+    # profilen (ikke bare barna - "K" og "T" for Kristin/Truls er også definert
+    # der), slik at vi kan sjekke om kalendertittelen allerede eksplisitt nevner
+    # NOEN i familien.
+    from family_profile import extract_child_team_names, _word_boundary_match
+    all_family_names = extract_child_team_names(family_ctx)
+
+    def _title_names_someone(summary: str) -> bool:
+        summary_lower = (summary or "").strip().lower()
+        if not summary_lower:
+            return False
+        for _person, _names in all_family_names.items():
+            for _name in _names:
+                _name_lower = _name.strip().lower()
+                if _name_lower and _word_boundary_match(summary_lower, _name_lower):
+                    return True
+        return False
+
     result = []
     for e in events:
         ev = dict(e)
+
+        # Unntak 1: tittelen nevner allerede et navn/kallenavn fra familieprofilen
+        # (f.eks. "K Ledermøte" -> "K" = Kristin) - da skal vi ALDRI la en
+        # tilfeldig dato/tid-sammenfall med en ANNEN persons aktivitet overstyre
+        # dette. AI-en leser selv det eksplisitte navnet direkte fra tittelen (det
+        # gjør den allerede riktig for f.eks. "Truls innebandy", "Kristin trening"),
+        # så vi lar den oppføringen stå helt UTEN kode-tag i stedet for å risikere
+        # en feil tag.
+        if _title_names_someone(e.get("summary", "")):
+            result.append(ev)
+            continue
+
         ev_start = None
         ev_end = None
         if e.get("start"):
@@ -206,10 +251,24 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
             if len(children_on_start_day) == 1:
                 ev["child"] = next(iter(children_on_start_day))
         elif ev_start:
+            # Unntak 2: et generisk idretts-/aktivitetsord i tittelen åpner for et
+            # videre vindu - uten dette ble f.eks. "Serierunde 1 (Eckbobanen)" og
+            # "Ready Blå Seriespill - Minirunde" stående utagget fordi de lå
+            # nøyaktig 30 min fra riktig Spond-tidspunkt (sannsynligvis
+            # oppmøtetid vs. kamp-start), rett utenfor standardvinduet. En
+            # ikke-idretts-avtale (f.eks. en vaksine) har aldri et slikt ord i
+            # tittelen, og får derfor ALDRI det videre vinduet - den forblir
+            # beskyttet av det smale standardvinduet akkurat som før.
+            summary_lower = (e.get("summary") or "").strip().lower()
+            window = (
+                EXTENDED_MATCH_WINDOW_MINUTES
+                if any(kw in summary_lower for kw in _SPORTS_KEYWORDS)
+                else MATCH_WINDOW_MINUTES
+            )
             best = None
             for sp_start, child in tagged_spond:
                 delta = abs((ev_start - sp_start).total_seconds()) / 60
-                if delta <= MATCH_WINDOW_MINUTES and (best is None or delta < best[0]):
+                if delta <= window and (best is None or delta < best[0]):
                     best = (delta, child)
             if best:
                 ev["child"] = best[1]
@@ -1747,13 +1806,37 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             # Henter derfor i tillegg ALLE Spond-arrangementer der eventStart faller i
             # DENNE UKEN, uavhengig av når de ble lagret.
             week_end_dt = datetime(sunday.year, sunday.month, sunday.day, 23, 59, 59, tzinfo=OSLO_TZ)
+            # Et flerdagers kalenderarrangement (f.eks. en cup fredag-mandag) kan ha
+            # STARTET i forrige uke, selv om det vises/strekker seg inn i uken vi ser
+            # på nå. Spond-motparten (eventStart) for et slikt arrangement ligger da
+            # FØR denne ukens mandag - et spørrevindu avgrenset strengt til denne ukens
+            # mandag-søndag ville aldri funnet den raden, og arrangementet ville derfor
+            # mangle "Gjelder: ..."-tag helt når man ser på den SENERE uken det også
+            # vises i. Vi utvider derfor spørrevinduet til å dekke hele spennet til de
+            # FAKTISK hentede kalenderoppføringene (tidligste start - seneste slutt),
+            # ikke bare den strengt viste uken.
+            query_start_dt = week_start_dt
+            query_end_dt = week_end_dt
+            for _e in events:
+                for _field, _cmp in (("start", min), ("end", max)):
+                    _iso = _e.get(_field)
+                    if not _iso:
+                        continue
+                    try:
+                        _dt = datetime.fromisoformat(_iso)
+                    except Exception:
+                        continue
+                    if _field == "start":
+                        query_start_dt = min(query_start_dt, _dt)
+                    else:
+                        query_end_dt = max(query_end_dt, _dt)
             async with pool.acquire() as conn2:
                 spond_event_rows = await conn2.fetch(
                     "SELECT source, category, meta FROM messages"
                     " WHERE user_id = $1 AND source = 'spond' AND meta ? 'eventStart'"
                     " AND (meta->>'eventStart')::timestamptz >= $2"
                     " AND (meta->>'eventStart')::timestamptz <= $3",
-                    uid, week_start_dt, week_end_dt
+                    uid, query_start_dt, query_end_dt
                 )
             logger.info(f"[UKESOVERSIKT] Spond-arrangementer denne uken (uavh. av lagringsdato): {len(spond_event_rows)}")
             from family_profile import extract_child_team_names
