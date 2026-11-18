@@ -1246,6 +1246,85 @@ async def whatsapp_logout(user: CurrentUser):
         res = await client.post(f"{wa_url}/logout")
         return res.json()
 
+# ─── Varme-proxy (home-control) ──────────────────────────────────────────────
+# Videresender til home-control-backenden (egen Railway-app som styrer ovnene via
+# Mill/Adax/MELCloud) slik at frontend aldri trenger å kjenne til eller sende
+# home-control sin API-token direkte - samme mønster som WhatsApp-proxyen over.
+
+HEATING_API_URL = os.environ.get("HEATING_API_URL", "https://home-control-production-c1a6.up.railway.app")
+
+def _get_heating_token() -> str:
+    """Henter API-token for home-control fra miljøvariabel (satt i Railway)."""
+    return os.environ.get("HEATING_API_TOKEN", "")
+
+class HeatingLevelRequest(BaseModel):
+    level: int  # 1-5
+
+@app.get("/heating/level")
+async def heating_get_level(user: CurrentUser):
+    """Henter nåværende varmenivå (1-5) fra home-control."""
+    token = _get_heating_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="Varmestyring ikke konfigurert (mangler HEATING_API_TOKEN)")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{HEATING_API_URL}/api/level", headers={"X-API-Token": token})
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Klarte ikke å nå varmestyringen: {e}")
+
+@app.put("/heating/level")
+async def heating_set_level(req: HeatingLevelRequest, user: CurrentUser):
+    """Setter nytt varmenivå (1-5) hos home-control. Merk: Adax-ovner kan bruke
+    opptil 1-10 minutter før endringen faktisk slår inn fysisk - svaret her betyr
+    bare at kommandoen er sendt, ikke at alle ovner er ferdig oppdatert."""
+    if not (1 <= req.level <= 5):
+        raise HTTPException(status_code=400, detail="Nivå må være mellom 1 og 5")
+    token = _get_heating_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="Varmestyring ikke konfigurert (mangler HEATING_API_TOKEN)")
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.put(
+                f"{HEATING_API_URL}/api/level",
+                json={"level": req.level},
+                headers={"X-API-Token": token},
+            )
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Klarte ikke å sette varmenivå: {e}")
+
+@app.get("/heating/devices")
+async def heating_get_devices(user: CurrentUser):
+    """Henter status per ovn (navn, på/av, temperatur, online) fra home-control."""
+    token = _get_heating_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="Varmestyring ikke konfigurert (mangler HEATING_API_TOKEN)")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{HEATING_API_URL}/api/devices", headers={"X-API-Token": token})
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Klarte ikke å hente ovnsstatus: {e}")
+
+@app.get("/heating/timers")
+async def heating_get_timers(user: CurrentUser):
+    """Henter timer-status (på/av m.m.) fra home-control."""
+    token = _get_heating_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="Varmestyring ikke konfigurert (mangler HEATING_API_TOKEN)")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(f"{HEATING_API_URL}/api/timers", headers={"X-API-Token": token})
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Klarte ikke å hente timerstatus: {e}")
+
+
 # ─── Admin: opprydding ───────────────────────────────────────────────────────
 
 @app.post("/admin/fix-null-users")
