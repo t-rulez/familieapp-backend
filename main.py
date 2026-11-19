@@ -1859,6 +1859,21 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     # og må aldri konkurreres bort av ferskere, men mindre viktig innhold.
     SKOLE_SOURCES = ("showbie", "skolemelding")
     _UKEDAGER = ("mandag", "tirsdag", "onsdag", "torsdag", "fredag")
+    _mål_uke = monday.isocalendar()[1]
+
+    def _feil_uke(m):
+        """True hvis tittelen eksplisitt oppgir et ANNET ukenummer enn uken vi
+        lager oversikt for.
+
+        Showbie-oppgaver heter typisk "Uke 47: <fil>". Forrige ukes plan har
+        sin egen lekse-del og timeplan, og konkurrerer da direkte med denne
+        ukens plan om AI-ens oppmerksomhet. Slike nedprioriteres til laveste
+        nivå, slik at bare tittelen (ikke hele lekselista) tar plass.
+        Meldinger uten ukenummer i tittelen berøres ikke.
+        """
+        import re
+        treff = re.search(r"uke\s*(\d{1,2})", (m.get("title") or "").lower())
+        return bool(treff) and int(treff.group(1)) != _mål_uke
 
     def _er_ukeplan(m):
         """Skiller EKTE ukeplan-dokumenter fra annet skole-innhold.
@@ -1872,7 +1887,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         ekte ukeplan-dokument kjennetegnes derimot av at det har en timeplan
         eller lekseliste strukturert over UKEDAGENE - minst tre av dem.
         """
-        if m.get("source") not in SKOLE_SOURCES:
+        if m.get("source") not in SKOLE_SOURCES or _feil_uke(m):
             return False
         body = (m.get("body") or "").lower()
         return sum(1 for d in _UKEDAGER if d in body) >= 3
@@ -1891,7 +1906,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             # innleveringer fra samme kilde ikke spiser like mye av budsjettet.
             if _er_ukeplan(m):
                 max_b = 4000
-            elif m.get("source") in SKOLE_SOURCES:
+            elif m.get("source") in SKOLE_SOURCES and not _feil_uke(m):
                 max_b = 1200
             else:
                 max_b = 600
@@ -1904,7 +1919,10 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     # en fersk, men uviktig melding.
     rows_sorted = sorted(
         (dict(r) for r in rows),
-        key=lambda m: (0 if _er_ukeplan(m) else (1 if m.get("source") in SKOLE_SOURCES else 2),),
+        key=lambda m: (
+            0 if _er_ukeplan(m)
+            else (1 if (m.get("source") in SKOLE_SOURCES and not _feil_uke(m)) else 2),
+        ),
     )
 
     msg_context = ""
@@ -2132,8 +2150,21 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "det som må til for å få plass. Tom liste hvis ingenting er kjent for personen den "
         "dagen. "
         "IKKE finn på noe som ikke støttes av kildene over.\n\n"
+        "ARBEIDSMÅTE - gjør dette i TO trinn, i denne rekkefølgen:\n"
+        "TRINN 1: Finn ukeplanen for DENNE uken for hvert barn, og skriv ned en ren opptelling "
+        "av hva den inneholder - i feltet \"skole_funnet\". For hvert barn: alle fag som har "
+        "lekse (ett innslag per fag), og alle spesial-aktiviteter i timeplanen (gym, svømming, "
+        "fellessamling, bibliotek, tur) med dag og klokkeslett. Dette er en REN AVSKRIFT fra "
+        "kilden - ikke utelat noe her, og ikke slå sammen fag.\n"
+        "TRINN 2: Fordel alt du listet i TRINN 1 ut på dagene i \"days\". Lekser som gjelder "
+        "hele uken legges under mandag; spesial-aktiviteter på sin egen dag. ALT som står i "
+        "\"skole_funnet\" SKAL finnes igjen i \"days\" - ingenting får forsvinne mellom trinnene.\n\n"
         "Svar KUN med gyldig JSON, nøyaktig i dette formatet, ingen annen tekst før eller etter:\n"
-        '{"days": [\n'
+        '{"skole_funnet": {\n'
+        '  "Gustav": {"lekser": ["Norsk: ...", "Matte: ...", "Engelsk: ..."], '
+        '"timeplan": ["tirsdag 11:30 Gym", "onsdag 11:30 Fellessamling"]},\n'
+        '  "Rasmus": {"lekser": ["..."], "timeplan": ["..."]}},\n'
+        ' "days": [\n'
         '  {"day": "mandag", "people": {'
         '"Gustav": {"skole": ["..."], "annet": ["..."]}, '
         '"Rasmus": {"skole": ["..."], "annet": ["..."]}, '
@@ -2141,7 +2172,8 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         '"Truls": {"skole": ["..."], "annet": ["..."]}}},\n'
         '  ...\n'
         "]} (nøyaktig 7 dager totalt, i rekkefølge mandag til søndag - skole og annet er "
-        "tomme lister [] hvis ingenting er kjent)"
+        "tomme lister [] hvis ingenting er kjent. \"skole_funnet\" har kun med de to barna, "
+        "og tomme lister hvis ingen ukeplan finnes for denne uken.)"
     )
 
     import json
@@ -2195,6 +2227,12 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
 
     def _str_list(v):
         return v if isinstance(v, list) else []
+
+    # "skole_funnet" er AI-ens egen opptelling fra TRINN 1 (se prompten). Den brukes
+    # ikke videre i svaret til appen, men logges: avviker den fra det som faktisk
+    # havnet i "days", vet vi at feilen skjer i fordelingen og ikke i lesingen.
+    if isinstance(parsed, dict) and parsed.get("skole_funnet"):
+        logger.info(f"[UKESOVERSIKT-DEBUG] AI fant (trinn 1): {parsed.get('skole_funnet')}")
 
     parsed_days = parsed.get("days", []) if isinstance(parsed, dict) else []
     result_days = []
