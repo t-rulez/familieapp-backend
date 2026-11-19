@@ -1855,6 +1855,10 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             uid
         )
 
+    # Skolekilder er de viktigste for denne oversikten (ukeplaner, lekser, beskjeder)
+    # og må aldri konkurreres bort av ferskere, men mindre viktig innhold.
+    SKOLE_SOURCES = ("showbie", "skolemelding")
+
     def fmt(m):
         src = m.get("source_label") or m.get("source", "?")
         parts = [f"[{src} - {m.get('category','')} - {m.get('time','')}] {m.get('title','')}"]
@@ -1864,25 +1868,46 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         if m.get("tldr"):
             parts.append(f"  Sammendrag: {m['tldr']}")
         if m.get("body") and m["body"] != m.get("tldr", ""):
-            # Var 1500 for showbie - kuttet av midt i en vanlig ukeplan, rett FØR
-            # "Lekser"-delen (den viktigste delen!), siden selve timeplanen for 5
-            # dager alene fort passerer 1500 tegn. Økt til 2500 - mer enn de andre
-            # to AI-endepunktene (2000) bruker, siden ukesoversikten trenger mest
-            # detalj for å klare å dele opp en hel ukeplan per dag.
-            max_b = 2500 if m.get("source") == "showbie" else 600
+            # Var 1500 -> 2500 for showbie, men en hel ukeplan (timeplan + lekser +
+            # "Viktige beskjeder"-del) passerer fort 2500 tegn, og da kuttes nettopp
+            # slutten - der beskjeder om svømming/gym/turer ofte står. Økt til 4000.
+            # 'skolemelding' (Skoleplattform-PDF) er samme type innhold som Showbie-
+            # ukeplaner og hadde tidligere bare 600 tegn - får nå samme behandling.
+            max_b = 4000 if m.get("source") in SKOLE_SOURCES else 600
             parts.append(f"  Innhold: {m['body'][:max_b]}")
         return "\n".join(parts)
 
+    # Rekkefølge: skolekilder først (de er grunnlaget for "skole"-kolonnen), deretter
+    # resten etter nyhet. Uten dette avgjorde ren nyhet hvem som fikk plass, og en
+    # ukeplan fra forrige uke kunne tape mot en fersk, men uviktig melding.
+    rows_sorted = sorted(
+        (dict(r) for r in rows),
+        key=lambda m: (0 if m.get("source") in SKOLE_SOURCES else 1,),
+    )
+
     msg_context = ""
-    for row in rows:
-        part = fmt(dict(row))
-        # Var 25000 - meldinger sorteres kun etter nyhet (timestamp DESC), ikke etter
-        # viktighet, så en fullstendig, viktig ukeplan kunne falle helt ut av budsjettet
-        # hvis nyere, men uviktig "støy" (bilder, skjermbilder, oppskrifter o.l.) brukte
-        # opp plassen først. Økt til 45000 - koster ikke noe på selve AI-svaret (det er
-        # kun input), og gir mye større margin før noe viktig faller ut.
+    included_skole, skipped_skole, n_skipped = [], [], 0
+    for m in rows_sorted:
+        part = fmt(m)
+        # Var "break" - da stoppet den FØRSTE meldingen som ikke fikk plass hele
+        # gjennomgangen, slik at alt bakenfor (også små meldinger som ville fått
+        # plass) ble forkastet. "continue" pakker i stedet inn alt som faktisk får
+        # plass innenfor budsjettet.
         if len(msg_context) + len(part) > 45000:
-            break
+            n_skipped += 1
+            if m.get("source") in SKOLE_SOURCES:
+                skipped_skole.append(m.get("title", ""))
+            continue
+        msg_context += ("\n\n" if msg_context else "") + part
+        if m.get("source") in SKOLE_SOURCES:
+            included_skole.append(m.get("title", ""))
+    logger.info(
+        f"[UKESOVERSIKT-DEBUG] msg_context: {len(msg_context)} tegn, {len(rows)} rader hentet, "
+        f"{n_skipped} droppet pga budsjett"
+    )
+    logger.info(f"[UKESOVERSIKT-DEBUG] Skolekilder INKLUDERT ({len(included_skole)}): {included_skole}")
+    if skipped_skole:
+        logger.warning(f"[UKESOVERSIKT-DEBUG] Skolekilder DROPPET ({len(skipped_skole)}): {skipped_skole}")
 
     # Kalender for resten av uken (kan ikke hente bakover i tid)
     calendar_section = ""
@@ -2081,11 +2106,12 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     # "thinking" derimot MÅ være med (med et begrenset "effort"): uten den eksplisitte
     # innstillingen bruker modellen likevel intern "tenking" før selve svaret, men da
     # med et ubegrenset/for stort budsjett - det brukte opp HELE max_tokens og ga tomt
-    # svar (stop_reason: max_tokens). Var "low" - holdt for enkel mekanisk kategorisering,
-    # men ga ufullstendig dekning (hoppet over fag/dager) nå som prompten ber om mye mer
-    # grundig gjennomgang (alle fag + spesial-aktiviteter + alle dager, større kontekst).
-    # Hevet til "medium" - fortsatt et begrenset budsjett, ikke det ubegrensede nivået som
-    # forårsaket den opprinnelige feilen. max_tokens økt til 14000 som ekstra margin.
+    # svar (stop_reason: max_tokens). "low" holder siden oppgaven i bunn og grunn er
+    # mekanisk kategorisering. PRØVDE "medium" en gang - det ga et 200 OK-svar men med
+    # HELT TOMT skoleinnhold (ingen feil, bare tomt), trolig fordi modellen ble mer
+    # nølende rundt uke-/dato-matchingen og lot feltet stå tomt i tvil i stedet for å
+    # faktisk hente innholdet. Reversert til "low" - ga delvis, men ikke tomt, resultat.
+    # max_tokens beholdt på 14000 (uskyldig ekstra margin, ikke knyttet til problemet).
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10)) as client:
             resp = await client.post(
@@ -2093,7 +2119,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
                 json={"model": "claude-sonnet-5", "max_tokens": 14000,
                       "thinking": {"type": "adaptive"},
-                      "output_config": {"effort": "medium"},
+                      "output_config": {"effort": "low"},
                       "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
             )
     except httpx.TimeoutException:
@@ -2106,6 +2132,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
 
     resp_json = resp.json()
     raw = _extract_text(resp_json.get("content"))
+    logger.info(f"[UKESOVERSIKT-DEBUG] AI-svar (stop_reason={resp_json.get('stop_reason')}, {len(raw) if raw else 0} tegn):\n{raw}")
     if not raw:
         # Skjedde tidligere ved for lavt max_tokens: modellen brukte hele budsjettet på
         # "thinking" og rakk aldri å skrive selve JSON-svaret (stop_reason: max_tokens).
