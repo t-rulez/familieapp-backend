@@ -1858,6 +1858,24 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     # Skolekilder er de viktigste for denne oversikten (ukeplaner, lekser, beskjeder)
     # og må aldri konkurreres bort av ferskere, men mindre viktig innhold.
     SKOLE_SOURCES = ("showbie", "skolemelding")
+    _UKEDAGER = ("mandag", "tirsdag", "onsdag", "torsdag", "fredag")
+
+    def _er_ukeplan(m):
+        """Skiller EKTE ukeplan-dokumenter fra annet skole-innhold.
+
+        En Showbie-mappe inneholder mye som ikke er ukeplan: bilder tatt med
+        kamera, skjermbilder, oppskrifter, elevens egne innleveringer. Disse ble
+        tidligere gitt like mye plass (4000 tegn) som selve ukeplanen, og fylte
+        opp hele budsjettet. Å lete etter ordene "ukeplan"/"lekser" i teksten
+        virker ikke: Claude Vision sine bildebeskrivelser nevner ofte nettopp
+        disse ordene ("...inneholder ikke selve ukeplanen med lekser..."). Et
+        ekte ukeplan-dokument kjennetegnes derimot av at det har en timeplan
+        eller lekseliste strukturert over UKEDAGENE - minst tre av dem.
+        """
+        if m.get("source") not in SKOLE_SOURCES:
+            return False
+        body = (m.get("body") or "").lower()
+        return sum(1 for d in _UKEDAGER if d in body) >= 3
 
     def fmt(m):
         src = m.get("source_label") or m.get("source", "?")
@@ -1868,25 +1886,29 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         if m.get("tldr"):
             parts.append(f"  Sammendrag: {m['tldr']}")
         if m.get("body") and m["body"] != m.get("tldr", ""):
-            # Var 1500 -> 2500 for showbie, men en hel ukeplan (timeplan + lekser +
-            # "Viktige beskjeder"-del) passerer fort 2500 tegn, og da kuttes nettopp
-            # slutten - der beskjeder om svømming/gym/turer ofte står. Økt til 4000.
-            # 'skolemelding' (Skoleplattform-PDF) er samme type innhold som Showbie-
-            # ukeplaner og hadde tidligere bare 600 tegn - får nå samme behandling.
-            max_b = 4000 if m.get("source") in SKOLE_SOURCES else 600
+            # Tre nivåer, slik at en hel ukeplan (timeplan + lekser + "Viktige
+            # beskjeder") får plass i sin helhet, mens bilder/oppskrifter/
+            # innleveringer fra samme kilde ikke spiser like mye av budsjettet.
+            if _er_ukeplan(m):
+                max_b = 4000
+            elif m.get("source") in SKOLE_SOURCES:
+                max_b = 1200
+            else:
+                max_b = 600
             parts.append(f"  Innhold: {m['body'][:max_b]}")
         return "\n".join(parts)
 
-    # Rekkefølge: skolekilder først (de er grunnlaget for "skole"-kolonnen), deretter
-    # resten etter nyhet. Uten dette avgjorde ren nyhet hvem som fikk plass, og en
-    # ukeplan fra forrige uke kunne tape mot en fersk, men uviktig melding.
+    # Rekkefølge: ekte ukeplaner først, så øvrig skole-innhold, så resten - hver
+    # gruppe internt fortsatt etter nyhet (sorted er stabil). Uten dette avgjorde
+    # ren nyhet hvem som fikk plass, og en ukeplan fra forrige uke kunne tape mot
+    # en fersk, men uviktig melding.
     rows_sorted = sorted(
         (dict(r) for r in rows),
-        key=lambda m: (0 if m.get("source") in SKOLE_SOURCES else 1,),
+        key=lambda m: (0 if _er_ukeplan(m) else (1 if m.get("source") in SKOLE_SOURCES else 2),),
     )
 
     msg_context = ""
-    included_skole, skipped_skole, n_skipped = [], [], 0
+    ukeplaner, annet_skole, skipped_skole, n_skipped = [], [], [], 0
     for m in rows_sorted:
         part = fmt(m)
         # Var "break" - da stoppet den FØRSTE meldingen som ikke fikk plass hele
@@ -1899,13 +1921,16 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
                 skipped_skole.append(m.get("title", ""))
             continue
         msg_context += ("\n\n" if msg_context else "") + part
-        if m.get("source") in SKOLE_SOURCES:
-            included_skole.append(m.get("title", ""))
+        if _er_ukeplan(m):
+            ukeplaner.append(f"{m.get('title','')} ({len(m.get('body') or '')} tegn)")
+        elif m.get("source") in SKOLE_SOURCES:
+            annet_skole.append(m.get("title", ""))
     logger.info(
         f"[UKESOVERSIKT-DEBUG] msg_context: {len(msg_context)} tegn, {len(rows)} rader hentet, "
         f"{n_skipped} droppet pga budsjett"
     )
-    logger.info(f"[UKESOVERSIKT-DEBUG] Skolekilder INKLUDERT ({len(included_skole)}): {included_skole}")
+    logger.info(f"[UKESOVERSIKT-DEBUG] UKEPLANER inkludert ({len(ukeplaner)}): {ukeplaner}")
+    logger.info(f"[UKESOVERSIKT-DEBUG] Annet skole-innhold inkludert ({len(annet_skole)}): {annet_skole}")
     if skipped_skole:
         logger.warning(f"[UKESOVERSIKT-DEBUG] Skolekilder DROPPET ({len(skipped_skole)}): {skipped_skole}")
 
@@ -2061,6 +2086,15 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "og uavhengig av hvor mange stikkord som allerede ligger i den cellen fra før. Tell opp "
         "hvor mange fag som har lekse i kilden, og kontroller at du har laget like mange "
         "stikkord, FØR du svarer.\n"
+        "KONTROLL av timeplanen (gjør dette for HVER ukedag - dette er den feilen som "
+        "oftest gjøres): gå gjennom timeplanen dag for dag, og se spesifikt etter "
+        "gym/kroppsøving, svømming, fellessamling/samling, bibliotek og turer. HVER gang du "
+        "finner en av disse på en dag, SKAL den bli et eget stikkord i \"skole\" for nettopp "
+        "den dagen, med klokkeslettet fra timeplanen - f.eks. '🤸 11:30 Gym' på tirsdag og "
+        "torsdag hvis timeplanen viser gym begge dager, eller '🎬 09:45 Fellessamling' på "
+        "onsdag. Ikke hopp over dette steget fordi resten av timeplanen skal utelates: det er "
+        "nøyaktig disse aktivitetene som ER unntaket fra den regelen. Det holder ikke å ta med "
+        "bare én av dem - er det gym på to dager, skal det stå på begge.\n"
         "2) \"annet\": fritidsaktiviteter (trening, kamper, møter) og andre avtaler - alt som "
         "ikke er skolerelatert. VIKTIG: ALT som kommer fra kalenderen (seksjonen \"KALENDER\" "
         "over) skal ALLTID legges i \"annet\", aldri i \"skole\" - uansett hva aktiviteten "
