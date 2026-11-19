@@ -1870,15 +1870,33 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             # to AI-endepunktene (2000) bruker, siden ukesoversikten trenger mest
             # detalj for å klare å dele opp en hel ukeplan per dag.
             max_b = 2500 if m.get("source") == "showbie" else 600
-            parts.append(f"  Innhold: {m['body'][:max_b]}")
+            body = m["body"]
+            # Midlertidig debug-logg for å finne ut om showbie-innhold faktisk
+            # kuttes før det når AI-en, eller om det er fullstendig men likevel
+            # ikke blir med i AI-ens svar.
+            if m.get("source") == "showbie":
+                logger.info(
+                    f"[UKESOVERSIKT-DEBUG] Showbie '{m.get('title','')}': "
+                    f"body={len(body)} tegn, maks={max_b} tegn, "
+                    f"kuttet={'JA' if len(body) > max_b else 'nei'} | "
+                    f"start={body[:150]!r} | slutt={body[-150:]!r}"
+                )
+            parts.append(f"  Innhold: {body[:max_b]}")
         return "\n".join(parts)
 
     msg_context = ""
     for row in rows:
-        part = fmt(dict(row))
+        row_d = dict(row)
+        part = fmt(row_d)
         if len(msg_context) + len(part) > 25000:
+            if row_d.get("source") == "showbie":
+                logger.info(
+                    f"[UKESOVERSIKT-DEBUG] Showbie '{row_d.get('title','')}' FALT HELT UT "
+                    f"pga 25000-tegns-budsjett (msg_context var allerede {len(msg_context)} tegn)"
+                )
             break
         msg_context += ("\n\n" if msg_context else "") + part
+    logger.info(f"[UKESOVERSIKT-DEBUG] Total msg_context til AI: {len(msg_context)} tegn ({len(rows)} rader hentet fra DB)")
 
     # Kalender for resten av uken (kan ikke hente bakover i tid)
     calendar_section = ""
@@ -2100,6 +2118,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
 
     resp_json = resp.json()
     raw = _extract_text(resp_json.get("content"))
+    logger.info(f"[UKESOVERSIKT-DEBUG] AI-svar (rått, full lengde): {len(raw) if raw else 0} tegn\n{raw}")
     if not raw:
         # Skjedde tidligere ved for lavt max_tokens: modellen brukte hele budsjettet på
         # "thinking" og rakk aldri å skrive selve JSON-svaret (stop_reason: max_tokens).
