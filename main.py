@@ -2081,17 +2081,19 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     # "thinking" derimot MÅ være med (med et begrenset "effort"): uten den eksplisitte
     # innstillingen bruker modellen likevel intern "tenking" før selve svaret, men da
     # med et ubegrenset/for stort budsjett - det brukte opp HELE max_tokens og ga tomt
-    # svar (stop_reason: max_tokens). "low" holder siden oppgaven i bunn og grunn er
-    # mekanisk kategorisering. max_tokens økt til 12000 som ekstra margin siden
-    # prompten har blitt lengre (kalender-tagging, eksempler).
+    # svar (stop_reason: max_tokens). Var "low" - holdt for enkel mekanisk kategorisering,
+    # men ga ufullstendig dekning (hoppet over fag/dager) nå som prompten ber om mye mer
+    # grundig gjennomgang (alle fag + spesial-aktiviteter + alle dager, større kontekst).
+    # Hevet til "medium" - fortsatt et begrenset budsjett, ikke det ubegrensede nivået som
+    # forårsaket den opprinnelige feilen. max_tokens økt til 14000 som ekstra margin.
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10)) as client:
             resp = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": "claude-sonnet-5", "max_tokens": 12000,
+                json={"model": "claude-sonnet-5", "max_tokens": 14000,
                       "thinking": {"type": "adaptive"},
-                      "output_config": {"effort": "low"},
+                      "output_config": {"effort": "medium"},
                       "system": system, "messages": [{"role": "user", "content": "Lag ukesoversikten."}]}
             )
     except httpx.TimeoutException:
