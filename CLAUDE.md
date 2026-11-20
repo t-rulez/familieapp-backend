@@ -172,15 +172,20 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - **200 OK betyr ikke at datastien virker.** Under en refaktorering forsvant
   `msg_context += …`. AI-en fikk tom kontekst og svarte 200 OK med tomt innhold, uten feilmelding.
   Sjekk at dataene faktisk kommer fram.
+- **Ukeoversikten varierer fra gang til gang** (`effort: "low"`, og temperaturen kan ikke senkes
+  når tenking er på). Korte praktiske kommentarer i WhatsApp, som «husk pass», kan komme med i én
+  runde og mangle i den neste (observert 20.11.2026: med i 2 av 3 runder). Trykk «Oppdater» et par
+  ganger før du konkluderer med at noe er galt i prompten eller koden.
 
 ## Gjenstår
 
 - Debug-loggingen `[UKESOVERSIKT-DEBUG]` (fire korte linjer) står bevisst på. Fjern den når
   ukeoversikten har vært stabil en stund.
 - Test `effort: "medium"` på nytt med et rent grunnlag. Forrige test var ugyldig.
-- Bekreft at tilleggslinjer (f.eks. «🚗 Kjører m/N» og «🛂 Husk pass» under Birger Cup) kommer
-  som egne linjer rett under aktiviteten etter endringen 20.11.2026. Hvis ikke: sjekk
-  `UKESOVERSIKT-DEBUG`-loggen og rekkefølgen i AI-svaret.
+- Tilleggslinjer virker (bekreftet 20.11.2026: «🚗 Kjører m/Nicsen» som egen linje), men små
+  husk-påminnelser kommer ikke med hver gang. Eieren følger med. Mulige grep hvis det blir et
+  problem: (a) test `effort: "medium"` (se over), eller (b) gjør husk-/tilleggsinfo til et eget,
+  fast steg i to-trinnsmetoden, slik som `skole_funnet`.
 - Vurder å kutte kostnaden for Showbie Vision hvis tallene tilsier det, i denne rekkefølgen:
   1. Senk sidetaket fra 10 til 3–4.
   2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
