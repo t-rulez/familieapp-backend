@@ -119,10 +119,12 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - **WhatsApp-tjenesten** (Node.js/Baileys, egen Railway-tjeneste og eget repo, som ikke er
   tilgjengelig her). Den sender meldinger til `/messages/ingest` og varsler frakobling til
   `/integrations/whatsapp/status`.
-- **home-control** (varmestyring: Mill, MELCloud, Adax), som nås via proxyen `/heating/*`. Den
-  legger på `X-API-Token` på serversiden. Tokenet ligger **bare** som `HEATING_API_TOKEN` i
-  Railway og skal aldri deles i chat. Blir det delt, skal det byttes. Adax tåler én skriving per
-  30 sekunder og kan bruke 1–10 minutter på å endre seg fysisk.
+- **HomeControl** (repo `t-rulez/home-control`): eierens egen, separate løsning for
+  varmestyring (Mill, MELCloud, Adax). Den er ikke del av Brief, og Brief når den bare via proxyen
+  `/heating/*`. Endringer i ovnslogikken gjøres i HomeControl, og repoet kan legges til i økten
+  ved behov. Proxyen legger på `X-API-Token` på serversiden. Tokenet ligger **bare** som
+  `HEATING_API_TOKEN` i Railway og skal aldri deles i chat. Blir det delt, skal det byttes. Adax
+  tåler én skriving per 30 sekunder og kan bruke 1–10 minutter på å endre seg fysisk.
 
 ## Vær (`weather_service.py`)
 
@@ -136,6 +138,7 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - **MET-vilkårene er bindende:** identifiserende User-Agent (ellers blokkeres trafikken),
   respekter `Expires` og `If-Modified-Since`, kreditering etter CC BY 4.0, og maks fire desimaler
   i lat/lon.
+  Unntak: kreditering vises **ikke** i appen. Det er eierens bevisste valg med akseptert risiko.
 
 ## Showbie
 
