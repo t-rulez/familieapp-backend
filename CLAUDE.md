@@ -58,9 +58,35 @@ Alle unntatt `/`, `/auth/*` og `/push/vapid-key` krever `Authorization: Bearer <
 ### `/ai/week-overview`
 Bygger en prompt av meldinger fra de siste 14 dagene, kalenderen, familiekonteksten
 (`family_context`) og lært kontekst (`ai_learned_context`). Claude svarer med strukturert JSON:
-`days[].people[Navn] = {skole:[…], annet:[…]}`. Resultatet caches **i minnet** (`_week_cache`,
-nøkkel `bruker:mandag`) og forsvinner ved restart. `refresh=true` tvinger ny generering.
-Frontend (`uke.js`) er avhengig av dette formatet. Endres det, må frontend endres samtidig.
+`days[].people[Navn] = {skole:[…], annet:[…]}`. Frontend (`uke.js`) er avhengig av dette
+formatet. Endres det, må frontend endres samtidig.
+
+- **Cache:** `_week_cache` ligger i minnet, med nøkkel `bruker:mandag`. Den hoppes bare over med
+  `refresh=true` og nullstilles ved redeploy. Vanlig bytte mellom uker er gratis. Bare
+  «Oppdater» og auto-oppdateringen i frontend koster tokens.
+- **Rekkefølge innenfor meldingsbudsjettet:** ekte ukeplaner først, så øvrig skole-innhold, så
+  resten. Ukeplaner gjenkjennes med heuristikken **«minst tre ukedagsnavn i teksten»**.
+  Budsjettoverskridelse gir `continue`, ikke `break`.
+- **`skole_funnet`:** AI-en skriver først en ren opptelling av hva ukeplanen inneholder, og
+  fordeler den deretter på dagene. Feltet ignoreres av appen, men logges. Avviker opptellingen
+  fra `days`, ligger feilen i fordelingen og ikke i lesingen. Det var denne strukturelle grepet
+  som løste dekningsproblemet, ikke formuleringene i prompten.
+- **Thinking/effort:** står på `output_config.effort = "low"`, og det **må** være satt et
+  eksplisitt tak. Uten effort-innstilling brukte modellen hele `max_tokens` på tenking og
+  returnerte et tomt svar.
+
+### Ukeoversikt-prompten er i en skjør balanse: prøvd og forkastet
+
+Ikke gjenta disse uten en god grunn:
+
+| Forsøk | Resultat |
+|---|---|
+| `effort: "medium"` | 200 OK, men helt tomt skoleinnhold. Testen var **ugyldig** (se «tapt linje» under), så dette er egentlig uavklart |
+| Ingen effort-innstilling | Hele `max_tokens` gikk til tenking, og svaret ble tomt |
+| Sterkere og mer insisterende prompt-tekst | Svaret svingte: vektla jeg lekser, forsvant timeplan-aktivitetene, og omvendt |
+| Nøkkelordsøk («ukeplan», «lekser») for å finne ukeplaner | Feiler fordi Claude Vision sine bildebeskrivelser nevner disse ordene meta-tekstlig. Bruk tre-ukedager-heuristikken |
+| `break` ved budsjettoverskridelse | Én for stor melding stoppet alt bak den |
+| Sortering kun etter nyhet | Ukeplanen tapte budsjettet mot ferskere støy (bilder, oppskrifter) |
 
 ## Claude API
 
@@ -93,12 +119,61 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - **WhatsApp-tjenesten** (Node.js/Baileys, egen Railway-tjeneste og eget repo, som ikke er
   tilgjengelig her). Den sender meldinger til `/messages/ingest` og varsler frakobling til
   `/integrations/whatsapp/status`.
-- **home-control** (varmestyring: Mill, MELCloud, Adax), som nås via `HEATING_API_URL`. Adax kan
-  bruke opptil 10 minutter på å endre seg fysisk.
+- **home-control** (varmestyring: Mill, MELCloud, Adax), som nås via proxyen `/heating/*`. Den
+  legger på `X-API-Token` på serversiden. Tokenet ligger **bare** som `HEATING_API_TOKEN` i
+  Railway og skal aldri deles i chat. Blir det delt, skal det byttes. Adax tåler én skriving per
+  30 sekunder og kan bruke 1–10 minutter på å endre seg fysisk.
+
+## Vær (`weather_service.py`)
+
+- **Bevisst holdt utenfor AI-en.** `/weather/week` er rent HTTP + database og bruker null
+  tokens, slik at det ikke kan forstyrre ukeoversikt-prompten.
+- Det som lagres er **siste varsel laget mens dagen pågikk**, ikke en observasjon av hva været
+  faktisk ble. Bare inneværende og neste uke beholdes. Rader eldre enn mandag i inneværende uke
+  slettes.
+- Værhistorikk finnes bare fra 20.11.2026. Tidligere dager kan ikke hentes fra locationforecast.
+  Historisk vær ville krevd MET sitt Frost-API, som har egen innlogging.
+- **MET-vilkårene er bindende:** identifiserende User-Agent (ellers blokkeres trafikken),
+  respekter `Expires` og `If-Modified-Since`, kreditering etter CC BY 4.0, og maks fire desimaler
+  i lat/lon.
+
+## Showbie
+
+- Hver ny fil sendes gjennom Claude Vision (opptil 10 forhåndsvisningssider). Det skjer bare én
+  gang per fil (`existing_ids`), så i stabil drift er kostnaden null. Forbruket logges i
+  `api_usage` med purpose `"vision"`. Se statistikksiden før noe optimaliseres.
+- Showbie-tokenet utløper etter ca. seks måneder og må fornyes manuelt.
+- `ai_auto_skip` markerer ukeplaner som lavt prioritert («utenfor interesseområde»). Det påvirker
+  feeden, men ikke ukeoversikten, som ignorerer status.
+
+## Kjente fallgruver
+
+- **Railway fletter logglinjer** fra samtidige forespørsler, så flerlinjers loggblokker blir
+  stokket om. Bruk enlinjers logging, og ikke stol på strukturen i en flerlinjers blokk. Dette har
+  før ført til en feil konklusjon (at en fil manglet).
+- **200 OK betyr ikke at datastien virker.** Under en refaktorering forsvant
+  `msg_context += …`. AI-en fikk tom kontekst og svarte 200 OK med tomt innhold, uten feilmelding.
+  Sjekk at dataene faktisk kommer fram.
+
+## Gjenstår
+
+- Debug-loggingen `[UKESOVERSIKT-DEBUG]` (fire korte linjer) står bevisst på. Fjern den når
+  ukeoversikten har vært stabil en stund.
+- Test `effort: "medium"` på nytt med et rent grunnlag. Forrige test var ugyldig.
+- Vurder å kutte kostnaden for Showbie Vision hvis tallene tilsier det, i denne rekkefølgen:
+  1. Senk sidetaket fra 10 til 3–4.
+  2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
+  3. Hopp over åpenbare mønstre som «Foto fra kameraet» og «Skjermbilde». Dette er noe
+     risikabelt, siden ukeplanen kan være et bilde.
+- Kosmetisk: `whatsapp_status` er definert to ganger i `main.py` (ca. linje 1225). Harmløst.
 
 ## Arbeidsflyt
 
-Samme som i frontend: norsk overalt, utvikle på oppgitt branch, spør før PR og merge, og bruk
-squash-merge mot `main`. Railway deployer trolig automatisk fra `main` (ikke verifisert). Test
-lokalt med `python -m py_compile *.py` når det ikke finnes database eller nøkler. Endringer i
-API-formatet må koordineres med `familieapp`.
+Samme som i frontend (se `familieapp/CLAUDE.md`):
+- norsk overalt
+- **bekreft logikken før du koder** alt som ikke er trivielt
+- utvikle på oppgitt branch, spør før PR og merge, og bruk squash-merge mot `main`
+
+Railway deployer trolig automatisk fra `main` (ikke verifisert). Test lokalt med
+`python -m py_compile *.py` når det ikke finnes database eller nøkler. Test prompt- og
+budsjettlogikk isolert før levering. Endringer i API-formatet må koordineres med `familieapp`.
