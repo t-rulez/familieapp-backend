@@ -22,6 +22,12 @@ kodebakgrunn.
   migreringsverktøy. Nye kolonner legges til med `ALTER TABLE … ADD COLUMN IF NOT EXISTS` i
   init-funksjonene.
 - Ingen tester og ingen CI.
+- **Deploy bare ved kodeendringer:** `watchPatterns` i `railway.toml` gjør at Railway bare
+  deployer når `*.py`, `requirements.txt`, `Procfile`, `railway.toml` eller lignende oppsett
+  endres. Endringer som bare gjelder `CLAUDE.md`/`README.md`, kan derfor merges med en gang uten
+  deploy. Hver deploy tømmer ukeoversikt-cachen og koster en runde med tokens. Legges det til nye
+  filer som påvirker kjøringen, for eksempel datafiler eller ny konfig, må de inn i
+  `watchPatterns`.
 
 ## Filer
 
