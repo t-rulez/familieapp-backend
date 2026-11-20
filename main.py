@@ -1926,7 +1926,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
     )
 
     msg_context = ""
-    ukeplaner, annet_skole, skipped_skole, n_skipped = [], [], [], 0
+    ukeplaner, annet_skole, skipped_skole, skipped_annet = [], [], [], []
     for m in rows_sorted:
         part = fmt(m)
         # Var "break" - da stoppet den FØRSTE meldingen som ikke fikk plass hele
@@ -1934,9 +1934,10 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         # plass) ble forkastet. "continue" pakker i stedet inn alt som faktisk får
         # plass innenfor budsjettet.
         if len(msg_context) + len(part) > 45000:
-            n_skipped += 1
             if m.get("source") in SKOLE_SOURCES:
                 skipped_skole.append(m.get("title", ""))
+            else:
+                skipped_annet.append(f"[{m.get('source','?')}] {m.get('title','')}")
             continue
         msg_context += ("\n\n" if msg_context else "") + part
         if _er_ukeplan(m):
@@ -1945,12 +1946,16 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
             annet_skole.append(m.get("title", ""))
     logger.info(
         f"[UKESOVERSIKT-DEBUG] msg_context: {len(msg_context)} tegn, {len(rows)} rader hentet, "
-        f"{n_skipped} droppet pga budsjett"
+        f"{len(skipped_skole) + len(skipped_annet)} droppet pga budsjett"
     )
     logger.info(f"[UKESOVERSIKT-DEBUG] UKEPLANER inkludert ({len(ukeplaner)}): {ukeplaner}")
     logger.info(f"[UKESOVERSIKT-DEBUG] Annet skole-innhold inkludert ({len(annet_skole)}): {annet_skole}")
     if skipped_skole:
         logger.warning(f"[UKESOVERSIKT-DEBUG] Skolekilder DROPPET ({len(skipped_skole)}): {skipped_skole}")
+    if skipped_annet:
+        # Viktig for å se om f.eks. en WhatsApp-melding med praktisk info (hvem som
+        # kjører o.l.) faller ut av budsjettet, eller om den var med men ikke valgt.
+        logger.info(f"[UKESOVERSIKT-DEBUG] Ikke-skole DROPPET ({len(skipped_annet)}): {skipped_annet}")
 
     # Kalender for resten av uken (kan ikke hente bakover i tid)
     calendar_section = ""
@@ -2125,6 +2130,16 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
         "timeplanen, påminnelsen i \"annet\" på sin egen dag. At det finnes en 'Gymtøy'- eller "
         "'pakk'-påminnelse i kalenderen betyr IKKE at selve gym-/svømmetimen er dekket, og den "
         "skal derfor aldri utelates fra \"skole\" av den grunn.\n"
+        "PRAKTISK INFO FRA WHATSAPP/FORELDREGRUPPER hører også hjemme i \"annet\": hvem som "
+        "kjører eller henter, samkjøring, oppmøtested, hva som skal være med, og endringer "
+        "eller avlysninger - når det gjelder en bestemt dag eller en aktivitet som allerede "
+        "er i oversikten. Slik info er ofte det mest nyttige i hele uken, og skal ikke "
+        "utelates til fordel for en rutinemessig trening. Gjelder den en aktivitet som "
+        "allerede står der, SKAL den flettes inn i det eksisterende stikkordet i stedet for "
+        "å bli en egen linje - f.eks. '🏒 Birger Cup m/Nielsen' (ikke 'Birger Cup' og "
+        "'kjører med Nielsen' som to linjer). Bare når den ikke hører til noen aktivitet "
+        "blir den et eget stikkord. Ren prat/diskusjon i foreldregrupper uten konkret "
+        "praktisk opplysning skal fortsatt utelates.\n"
         "Format på hvert stikkord: '<emoji> <HH:MM> <aktivitet>' når tidspunkt er kjent "
         "(24-timers format med kolon, f.eks. '18:00'), ellers '<emoji> <aktivitet>' uten tid. "
         "Velg selv ett emoji som passer aktiviteten (f.eks. ⚽🏒🤾🎿📓📝💉🎉🍷👔🎂), ett emoji per stikkord. "
@@ -2211,7 +2226,7 @@ async def ai_week_overview(user: CurrentUser, refresh: bool = False, week_offset
 
     resp_json = resp.json()
     raw = _extract_text(resp_json.get("content"))
-    logger.info(f"[UKESOVERSIKT-DEBUG] AI-svar (stop_reason={resp_json.get('stop_reason')}, {len(raw) if raw else 0} tegn):\n{raw}")
+    logger.info(f"[UKESOVERSIKT-DEBUG] AI-svar: stop_reason={resp_json.get('stop_reason')}, {len(raw) if raw else 0} tegn")
     if not raw:
         # Skjedde tidligere ved for lavt max_tokens: modellen brukte hele budsjettet på
         # "thinking" og rakk aldri å skrive selve JSON-svaret (stop_reason: max_tokens).
