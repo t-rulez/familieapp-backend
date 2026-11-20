@@ -80,7 +80,8 @@ formatet. Endres det, må frontend endres samtidig.
 - **Tilleggslinjer (fra 20.11.2026):** Praktisk tilleggsinfo om en aktivitet (kjøring/henting,
   oppmøte, noe som må huskes eller tas med) flettes **ikke** inn i aktiviteten. Den blir en egen
   linje uten klokkeslett, med et emoji modellen velger selv (🚗, 🛂/🎒, 📍 …), rett etter
-  aktiviteten i lista. Tilleggslinjer utelates aldri for å spare plass og teller ikke mot grensen på
+  aktiviteten i lista. Hver tilleggslinje merkes med `+` først (`+🚗 Kjører m/N`). Frontend fjerner
+  merket, plasserer linjen under aktiviteten og viser den i lekse-skrift. Tilleggslinjer utelates aldri for å spare plass og teller ikke mot grensen på
   3 per celle. Avlysning eller ny tid endrer aktivitetens eget stikkord. Selvstendige stikkord uten
   tid står først i lista. Frontend (`buildDayRows()` i `uke.js`) bruker rekkefølgen til å legge
   tilleggslinjene i samme rad som aktiviteten. Endres rekkefølgeregelen, må frontend sjekkes.
