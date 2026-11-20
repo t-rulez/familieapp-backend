@@ -77,6 +77,11 @@ formatet. Endres det, må frontend endres samtidig.
   fordeler den deretter på dagene. Feltet ignoreres av appen, men logges. Avviker opptellingen
   fra `days`, ligger feilen i fordelingen og ikke i lesingen. Det var denne strukturelle grepet
   som løste dekningsproblemet, ikke formuleringene i prompten.
+- **Husk-påminnelser og linjelengde:** Praktisk info fra WhatsApp flettes inn i en eksisterende
+  aktivitet, men påminnelser om noe som må huskes eller tas med (pass, ID, utstyr, penger,
+  matpakke o.l.) skal **aldri** utelates for å spare plass. Får påminnelsen ikke plass i linjen,
+  blir den et eget stikkord («🛂 Husk pass»), som ikke teller mot grensen på 3 per celle.
+  Linjegrensen er ca. **50 tegn** (økt fra 40 den 20.11.2026).
 - **Thinking/effort:** står på `output_config.effort = "low"`, og det **må** være satt et
   eksplisitt tak. Uten effort-innstilling brukte modellen hele `max_tokens` på tenking og
   returnerte et tomt svar.
@@ -93,6 +98,7 @@ Ikke gjenta disse uten en god grunn:
 | Nøkkelordsøk («ukeplan», «lekser») for å finne ukeplaner | Feiler fordi Claude Vision sine bildebeskrivelser nevner disse ordene meta-tekstlig. Bruk tre-ukedager-heuristikken |
 | `break` ved budsjettoverskridelse | Én for stor melding stoppet alt bak den |
 | Sortering kun etter nyhet | Ukeplanen tapte budsjettet mot ferskere støy (bilder, oppskrifter) |
+| «Flett inn» + maks 40 tegn + maks 3 stikkord uten unntak | Reglene kolliderte: «husk pass» (nyeste WhatsApp-melding) ble droppet for å få plass til en eldre opplysning i samme linje. Løst med husk-unntaket over |
 
 ## Claude API
 
@@ -169,6 +175,8 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - Debug-loggingen `[UKESOVERSIKT-DEBUG]` (fire korte linjer) står bevisst på. Fjern den når
   ukeoversikten har vært stabil en stund.
 - Test `effort: "medium"` på nytt med et rent grunnlag. Forrige test var ugyldig.
+- Bekreft at husk-påminnelser (f.eks. «Husk pass» for Birger Cup) nå kommer med etter endringen
+  20.11.2026. Hvis ikke: sjekk `UKESOVERSIKT-DEBUG`-loggen.
 - Vurder å kutte kostnaden for Showbie Vision hvis tallene tilsier det, i denne rekkefølgen:
   1. Senk sidetaket fra 10 til 3–4.
   2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
