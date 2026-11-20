@@ -183,10 +183,12 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - Debug-loggingen `[UKESOVERSIKT-DEBUG]` (fire korte linjer) står bevisst på. Fjern den når
   ukeoversikten har vært stabil en stund.
 - Test `effort: "medium"` på nytt med et rent grunnlag. Forrige test var ugyldig.
-- Tilleggslinjer virker (bekreftet 20.11.2026: «🚗 Kjører m/Nicsen» som egen linje), men små
-  husk-påminnelser kommer ikke med hver gang. Eieren følger med. Mulige grep hvis det blir et
-  problem: (a) test `effort: "medium"` (se over), eller (b) gjør husk-/tilleggsinfo til et eget,
-  fast steg i to-trinnsmetoden, slik som `skole_funnet`.
+- Tilleggslinjer virker (bekreftet 20.11.2026): merket med `+`, vist i lekse-skrift rett under
+  riktig aktivitet, for kjøring («🚗 Kjører m/Nicsen»), husk-påminnelser («🛂 Husk pass») og
+  oppmøte-instruks fra WhatsApp (Rasmus' trening). Små husk-påminnelser kommer likevel ikke med
+  hver gang. Eieren følger med. Mulige grep hvis det blir et problem: (a) test `effort: "medium"`
+  (se over), eller (b) gjør husk-/tilleggsinfo til et eget, fast steg i to-trinnsmetoden, slik som
+  `skole_funnet`.
 - Vurder å kutte kostnaden for Showbie Vision hvis tallene tilsier det, i denne rekkefølgen:
   1. Senk sidetaket fra 10 til 3–4.
   2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
