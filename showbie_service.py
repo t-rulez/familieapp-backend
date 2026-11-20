@@ -122,12 +122,9 @@ class ShowbieService:
                                 if user_id:
                                     msg["user_id"] = user_id
                                 results.append(msg)
-                                if upsert_fn:
-                                    try:
-                                        await upsert_fn([msg])
-                                    except Exception as e:
-                                        logger.error(f"[SHOWBIE] Lagring feilet: {e}")
-                                # Lagre fortløpende
+                                # Lagre fortløpende. NB: dette kallet lå tidligere TO ganger
+                                # etter hverandre (copy-paste-rest), slik at hver melding ble
+                                # skrevet til databasen dobbelt.
                                 if upsert_fn:
                                     try:
                                         await upsert_fn([msg])

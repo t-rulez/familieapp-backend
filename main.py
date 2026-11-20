@@ -545,6 +545,14 @@ async def sync_loop():
             await run_sync_all()
         except Exception as e:
             logger.error(f"Synkronisering feilet: {e}")
+        # Værvarselet hentes her og ikke bare når siden åpnes: hver dag må rekke
+        # å bli lagret MENS den pågår, ellers finnes det ingen verdi å fryse når
+        # dagen er over (og dagen ville stått uten ikon i ettertid).
+        try:
+            from weather_service import refresh_weather
+            await refresh_weather()
+        except Exception as e:
+            logger.warning(f"[VÆR] Oppdatering i synk-løkken feilet: {e}")
         # Natt (23:00-06:00): 90 min, dag: 30 min
         hour = datetime.now(_oslo).hour
         is_night = hour >= 23 or hour < 6
@@ -777,6 +785,9 @@ async def lifespan(app: FastAPI):
         await init_user_tables()
         logger.info("Starter init_push_tables...")
         await init_push_tables()
+        logger.info("Starter init_weather_table...")
+        from weather_service import init_weather_table
+        await init_weather_table()
         logger.info("Alle tabeller initialisert OK")
     except Exception as e:
         logger.error(f"FATAL: Tabellinitialisering feilet: {e}", exc_info=True)
@@ -1323,6 +1334,45 @@ async def heating_get_timers(user: CurrentUser):
             return res.json()
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Klarte ikke å hente timerstatus: {e}")
+
+
+# ─── Værvarsel (MET Norway / Yr) ─────────────────────────────────────────────
+
+@app.get("/weather/week")
+async def weather_week(user: CurrentUser, week_offset: int = 0):
+    """Vær per dag for en uke (mandag-søndag), til dagkolonnen i uke.html.
+
+    Rent HTTP-oppslag mot MET med egen lagring - ingen AI er involvert, så
+    dette koster ingen tokens. Dager som har passert leveres fra databasen med
+    verdien de hadde mens dagen pågikk.
+    """
+    if week_offset not in (0, 1):
+        raise HTTPException(status_code=400, detail="week_offset må være 0 eller 1")
+
+    from weather_service import refresh_weather, get_week_weather
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday()) + timedelta(days=7 * week_offset)
+
+    # Egen rate-begrensning inne i refresh_weather sørger for at MET ikke
+    # kontaktes oftere enn vilkårene deres tillater, uansett hvor ofte
+    # endepunktet kalles.
+    try:
+        await refresh_weather()
+    except Exception as e:
+        logger.warning(f"[VÆR] Oppdatering feilet, bruker lagrede data: {e}")
+
+    try:
+        days = await get_week_weather(monday)
+    except Exception as e:
+        logger.error(f"[VÆR] Oppslag feilet: {e}")
+        raise HTTPException(status_code=502, detail="Klarte ikke å hente værdata")
+
+    return {
+        "week_start": monday.isoformat(),
+        "days": days,
+        "credit": "Værdata fra MET Norway",
+    }
 
 
 # ─── Admin: opprydding ───────────────────────────────────────────────────────
