@@ -1,5 +1,9 @@
 [build]
 builder = "NIXPACKS"
+# Deploy bare når filer som påvirker kjøringen endres. Endringer i CLAUDE.md,
+# README.md o.l. skal ikke gi ny deploy (som bl.a. tømmer ukeoversikt-cachen).
+# Legges det til nye filtyper som påvirker kjøringen, må de inn her.
+watchPatterns = ["**/*.py", "requirements.txt", "Procfile", "railway.toml", "runtime.txt", ".python-version", "nixpacks.toml"]
 
 [deploy]
 startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT"
