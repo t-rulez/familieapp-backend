@@ -77,11 +77,14 @@ formatet. Endres det, må frontend endres samtidig.
   fordeler den deretter på dagene. Feltet ignoreres av appen, men logges. Avviker opptellingen
   fra `days`, ligger feilen i fordelingen og ikke i lesingen. Det var denne strukturelle grepet
   som løste dekningsproblemet, ikke formuleringene i prompten.
-- **Husk-påminnelser og linjelengde:** Praktisk info fra WhatsApp flettes inn i en eksisterende
-  aktivitet, men påminnelser om noe som må huskes eller tas med (pass, ID, utstyr, penger,
-  matpakke o.l.) skal **aldri** utelates for å spare plass. Får påminnelsen ikke plass i linjen,
-  blir den et eget stikkord («🛂 Husk pass»), som ikke teller mot grensen på 3 per celle.
-  Linjegrensen er ca. **50 tegn** (økt fra 40 den 20.11.2026).
+- **Tilleggslinjer (fra 20.11.2026):** Praktisk tilleggsinfo om en aktivitet (kjøring/henting,
+  oppmøte, noe som må huskes eller tas med) flettes **ikke** inn i aktiviteten. Den blir en egen
+  linje uten klokkeslett, med et emoji modellen velger selv (🚗, 🛂/🎒, 📍 …), rett etter
+  aktiviteten i lista. Tilleggslinjer utelates aldri for å spare plass og teller ikke mot grensen på
+  3 per celle. Avlysning eller ny tid endrer aktivitetens eget stikkord. Selvstendige stikkord uten
+  tid står først i lista. Frontend (`buildDayRows()` i `uke.js`) bruker rekkefølgen til å legge
+  tilleggslinjene i samme rad som aktiviteten. Endres rekkefølgeregelen, må frontend sjekkes.
+- **Linjelengde:** ca. **50 tegn** (økt fra 40 den 20.11.2026).
 - **Thinking/effort:** står på `output_config.effort = "low"`, og det **må** være satt et
   eksplisitt tak. Uten effort-innstilling brukte modellen hele `max_tokens` på tenking og
   returnerte et tomt svar.
@@ -98,7 +101,7 @@ Ikke gjenta disse uten en god grunn:
 | Nøkkelordsøk («ukeplan», «lekser») for å finne ukeplaner | Feiler fordi Claude Vision sine bildebeskrivelser nevner disse ordene meta-tekstlig. Bruk tre-ukedager-heuristikken |
 | `break` ved budsjettoverskridelse | Én for stor melding stoppet alt bak den |
 | Sortering kun etter nyhet | Ukeplanen tapte budsjettet mot ferskere støy (bilder, oppskrifter) |
-| «Flett inn» + maks 40 tegn + maks 3 stikkord uten unntak | Reglene kolliderte: «husk pass» (nyeste WhatsApp-melding) ble droppet for å få plass til en eldre opplysning i samme linje. Løst med husk-unntaket over |
+| «Flett inn» praktisk info i aktivitetens linje (+ maks 40 tegn + maks 3 stikkord) | Reglene kolliderte: «husk pass» (nyeste WhatsApp-melding) ble droppet for å få plass til en eldre opplysning i samme linje. Erstattet av tilleggslinjer |
 
 ## Claude API
 
@@ -175,8 +178,9 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - Debug-loggingen `[UKESOVERSIKT-DEBUG]` (fire korte linjer) står bevisst på. Fjern den når
   ukeoversikten har vært stabil en stund.
 - Test `effort: "medium"` på nytt med et rent grunnlag. Forrige test var ugyldig.
-- Bekreft at husk-påminnelser (f.eks. «Husk pass» for Birger Cup) nå kommer med etter endringen
-  20.11.2026. Hvis ikke: sjekk `UKESOVERSIKT-DEBUG`-loggen.
+- Bekreft at tilleggslinjer (f.eks. «🚗 Kjører m/N» og «🛂 Husk pass» under Birger Cup) kommer
+  som egne linjer rett under aktiviteten etter endringen 20.11.2026. Hvis ikke: sjekk
+  `UKESOVERSIKT-DEBUG`-loggen og rekkefølgen i AI-svaret.
 - Vurder å kutte kostnaden for Showbie Vision hvis tallene tilsier det, i denne rekkefølgen:
   1. Senk sidetaket fra 10 til 3–4.
   2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
