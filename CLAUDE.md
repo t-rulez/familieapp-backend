@@ -46,6 +46,18 @@ kodebakgrunn.
 | `weather_service.py` | Værvarsel fra MET Norway. Dagens vær lagres løpende og «fryses» når dagen er over |
 | `push_service.py` | Web push (VAPID) |
 
+### Hvem en kalenderhendelse gjelder (`_tag_calendar_events_with_spond`)
+
+Settes i kode, aldri av AI-en. Rekkefølge:
+1. **Navn i tittelen vinner alltid.** Nevner tittelen ett eller flere navn/kallenavn fra
+   familieprofilen («K og T trening», «R & G gymtøy», «Bandytrening G17»), brukes **alle** de
+   navngitte («Gjelder: Kristin og Truls»), og tidsmatchingen mot Spond hoppes over. Før 21.11.2026
+   ble titler med flere navn sendt videre til tidsmatchingen, og «K og T trening» ble tagget
+   «Rasmus» fordi han hadde en Spond-trening på samme tid.
+2. Ellers tidsmatching mot taggede Spond-arrangementer (25 min, 35 min med idrettsord, startdato
+   for heldags/flerdagers).
+3. Ingen treff gir ingen tag, og prompten plasserer da hendelsen hos Kristin og Truls.
+
 ## Viktige endepunkter
 
 Alle unntatt `/`, `/auth/*` og `/push/vapid-key` krever `Authorization: Bearer <JWT>`.
