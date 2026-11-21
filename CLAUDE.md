@@ -221,6 +221,14 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
   2. Billig klassifisering med Haiku først («skoleinfo eller elevinnlevering?»).
   3. Hopp over åpenbare mønstre som «Foto fra kameraet» og «Skjermbilde». Dette er noe
      risikabelt, siden ukeplanen kan være et bilde.
+- **`whatsapp-service` (privat repo) har åpne endepunkter** (sjekket 21.11.2026): `/logout`, `/qr`,
+  `/qr-data` og `/fetch-history` krever ikke `API_TOKEN`. Alle som kjenner adressen, kan logge ut
+  WhatsApp-koblingen eller skanne QR-koden når den venter på tilkobling. `/` viser navnet på siste
+  gruppe. Filen `gitignore` mangler også punktum (`.gitignore`). Ingen hemmeligheter i repoet eller
+  historikken. Eieren venter med rettelsen til det blir behov. **Må rettes før repoet eventuelt gjøres
+  offentlig.** Plan: tjenesten krever `x-api-token` på disse endepunktene (`/` forblir åpen for
+  Railways helsesjekk, men uten gruppenavn), og backend-proxyen (`/whatsapp/status|qr|logout`)
+  sender med `API_TOKEN`. Backend merges først.
 - Kosmetisk: `whatsapp_status` er definert to ganger i `main.py` (ca. linje 1225). Harmløst.
 
 ## Arbeidsflyt
