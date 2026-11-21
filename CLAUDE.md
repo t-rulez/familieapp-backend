@@ -58,6 +58,19 @@ Settes i kode, aldri av AI-en. Rekkefølge:
    for heldags/flerdagers).
 3. Ingen treff gir ingen tag, og prompten plasserer da hendelsen hos Kristin og Truls.
 
+## Sikkerhet (repoene kan være offentlige)
+
+Koden kan deles offentlig (eierens valg 21.11.2026). Alle hemmeligheter ligger derfor **bare** i
+Railway, og koden har ingen reserveverdier som gir tilgang:
+- **`JWT_SECRET`** har ingen standardverdi. Mangler den, avvises all innlogging.
+- **Registrering er stengt.** En ny bruker krever `REGISTRATION_CODE` i Railway, og koden må
+  oppgis (`registration_code`). Unntaket er den aller første brukeren i en tom database, så en som
+  kopierer koden kan komme i gang. Frontend har foreløpig ikke et felt for koden. Det må legges inn
+  den dagen det blir aktuelt med flere brukere.
+- **Varmestyring (`/heating/*`)** er bare for e-postene i `HEATING_ALLOWED_EMAILS`, eller hvis den
+  ikke er satt, bare for den første brukeren (eieren). Kristin bruker eierens innlogging.
+- Legg aldri inn nøkler, passord eller tokens i koden eller i `CLAUDE.md`.
+
 ## Viktige endepunkter
 
 Alle unntatt `/`, `/auth/*` og `/push/vapid-key` krever `Authorization: Bearer <JWT>`.
@@ -140,7 +153,7 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 `DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`, `API_TOKEN`, `ANTHROPIC_API_KEY`,
 `RESEND_API_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_EMAIL`, `WHATSAPP_SERVICE_URL`,
 `HEATING_API_URL`, `HEATING_API_TOKEN`, `WEATHER_LAT`, `WEATHER_LON`, `WEATHER_USER_AGENT`
-(valgfri), og e-postoppsett som `EMAIL_HOST`/`EMAIL_*` eller nummerert `EMAIL_1_*`…`EMAIL_9_*`.
+(valgfri), `REGISTRATION_CODE` (valgfri, stengt uten), `HEATING_ALLOWED_EMAILS` (valgfri), og e-postoppsett som `EMAIL_HOST`/`EMAIL_*` eller nummerert `EMAIL_1_*`…`EMAIL_9_*`.
 
 ## Eksterne tjenester utenfor dette repoet
 
