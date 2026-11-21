@@ -22,7 +22,10 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ─── JWT-tokens ───────────────────────────────────────────────────────────────
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-me-in-production")
+# Ingen standardverdi: koden er offentlig, så en kjent reserve-hemmelighet ville latt
+# hvem som helst lage gyldige innlogginger. Uten JWT_SECRET i Railway avvises all
+# innlogging (se create_token/decode_token).
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 30
 
@@ -33,10 +36,14 @@ def create_token(user_id: str, email: str) -> str:
         "email": email,
         "exp": expire
     }
+    if not JWT_SECRET:
+        raise RuntimeError("JWT_SECRET er ikke satt - innlogging er avslått")
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def decode_token(token: str) -> Optional[dict]:
     try:
+        if not JWT_SECRET:
+            return None
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except JWTError:
         return None

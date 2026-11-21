@@ -366,6 +366,28 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 
+
+async def get_heating_user(authorization: Optional[str] = Header(None)) -> dict:
+    """Som get_current_user, men slipper bare inn brukere som får styre varmen:
+    e-postene i HEATING_ALLOWED_EMAILS (kommaseparert) i Railway, eller - hvis den
+    ikke er satt - bare den FØRSTE brukeren som ble opprettet (eieren). Varmen er
+    eierens egen løsning (HomeControl), og en annen innlogget bruker skal ikke kunne
+    styre ovnene."""
+    user = await get_current_user(authorization)
+    allowed = [e.strip().lower() for e in os.environ.get("HEATING_ALLOWED_EMAILS", "").split(",") if e.strip()]
+    if allowed:
+        ok = (user.get("email") or "").lower() in allowed
+    else:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            first = await conn.fetchrow("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+        ok = bool(first) and str(first["id"]) == str(user.get("id"))
+    if not ok:
+        raise HTTPException(status_code=403, detail="Ingen tilgang til varmestyring")
+    return user
+
+HeatingUser = Annotated[dict, Depends(get_heating_user)]
+
 # ─── AI-behandling ────────────────────────────────────────────────────────────
 
 async def _scoring_enabled(user_id: str) -> bool:
@@ -820,6 +842,7 @@ class RegisterRequest(BaseModel):
     email: str
     display_name: str
     password: str
+    registration_code: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: str
@@ -827,8 +850,20 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/register")
 async def register(req: RegisterRequest):
+    # Registreringen er stengt med mindre REGISTRATION_CODE er satt i Railway og
+    # oppgis riktig. Koden er offentlig og backend-adressen lett å gjette - uten dette
+    # kunne hvem som helst lage en bruker og f.eks. styre varmen. Unntak: den aller
+    # første brukeren (tom database), slik at en som kopierer koden kan komme i gang.
+    n_users = await count_users()
+    if n_users > 0:
+        import hmac
+        expected_code = os.environ.get("REGISTRATION_CODE", "")
+        if not expected_code:
+            raise HTTPException(status_code=403, detail="Registrering er stengt")
+        if not hmac.compare_digest((req.registration_code or "").strip(), expected_code):
+            raise HTTPException(status_code=403, detail="Feil invitasjonskode")
     # Sjekk maks 5 brukere
-    if await count_users() >= 5:
+    if n_users >= 5:
         raise HTTPException(status_code=403, detail="Maks antall brukere nådd")
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Passord må være minst 8 tegn")
@@ -1132,8 +1167,11 @@ async def ingest_messages(
     payload: IngestPayload,
     x_api_token: Optional[str] = Header(None)
 ):
-    expected = os.environ.get("API_TOKEN")
-    if expected and x_api_token != expected:
+    # Avvis alt hvis API_TOKEN mangler (før slapp alt inn da). Koden er offentlig,
+    # så denne inngangen fra WhatsApp-tjenesten må alltid være beskyttet.
+    import hmac
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected or not hmac.compare_digest(x_api_token or "", expected):
         raise HTTPException(status_code=401, detail="Ugyldig token")
 
     # Finn første bruker hvis user_id ikke er satt
@@ -1181,8 +1219,11 @@ async def whatsapp_status(
 ):
     """Kalles av whatsapp-service når tilkoblingen faller ut, logges ut, eller kommer tilbake.
     Sender push-varsel til alle brukere som har et aktivt push-abonnement."""
-    expected = os.environ.get("API_TOKEN")
-    if expected and x_api_token != expected:
+    # Avvis alt hvis API_TOKEN mangler (før slapp alt inn da). Koden er offentlig,
+    # så denne inngangen fra WhatsApp-tjenesten må alltid være beskyttet.
+    import hmac
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected or not hmac.compare_digest(x_api_token or "", expected):
         raise HTTPException(status_code=401, detail="Ugyldig token")
 
     if payload.event == "logged_out":
@@ -1274,7 +1315,7 @@ class HeatingLevelRequest(BaseModel):
     level: int  # 1-5
 
 @app.get("/heating/level")
-async def heating_get_level(user: CurrentUser):
+async def heating_get_level(user: HeatingUser):
     """Henter nåværende varmenivå (1-5) fra home-control."""
     token = _get_heating_token()
     if not token:
@@ -1288,7 +1329,7 @@ async def heating_get_level(user: CurrentUser):
         raise HTTPException(status_code=502, detail=f"Klarte ikke å nå varmestyringen: {e}")
 
 @app.put("/heating/level")
-async def heating_set_level(req: HeatingLevelRequest, user: CurrentUser):
+async def heating_set_level(req: HeatingLevelRequest, user: HeatingUser):
     """Setter nytt varmenivå (1-5) hos home-control. Merk: Adax-ovner kan bruke
     opptil 1-10 minutter før endringen faktisk slår inn fysisk - svaret her betyr
     bare at kommandoen er sendt, ikke at alle ovner er ferdig oppdatert."""
@@ -1310,7 +1351,7 @@ async def heating_set_level(req: HeatingLevelRequest, user: CurrentUser):
         raise HTTPException(status_code=502, detail=f"Klarte ikke å sette varmenivå: {e}")
 
 @app.get("/heating/devices")
-async def heating_get_devices(user: CurrentUser):
+async def heating_get_devices(user: HeatingUser):
     """Henter status per ovn (navn, på/av, temperatur, online) fra home-control."""
     token = _get_heating_token()
     if not token:
@@ -1324,7 +1365,7 @@ async def heating_get_devices(user: CurrentUser):
         raise HTTPException(status_code=502, detail=f"Klarte ikke å hente ovnsstatus: {e}")
 
 @app.get("/heating/timers")
-async def heating_get_timers(user: CurrentUser):
+async def heating_get_timers(user: HeatingUser):
     """Henter timer-status (på/av m.m.) fra home-control."""
     token = _get_heating_token()
     if not token:
