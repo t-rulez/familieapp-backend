@@ -185,21 +185,22 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
     from family_profile import extract_child_team_names, _word_boundary_match
     all_family_names = extract_child_team_names(family_ctx)
 
-    def _title_named_person(summary: str) -> Optional[str]:
-        """Finner HVEM tittelen eksplisitt navngir, basert på de samme anførselstegn-
-        navnene/kallenavnene som family_profile.py bruker - eller None hvis tittelen
-        ikke navngir noen, ELLER hvis den tvetydig matcher FLERE personer samtidig
-        (f.eks. "R & G gymtøy", som bevisst skal gjelde begge - da er det ingen
-        ENKELT person å sette direkte, og vi lar AI-en håndtere det som i dag).
-        Returnerer PERSONEN DIREKTE (ikke bare "funnet/ikke funnet") fordi et
-        kallenavn som "G17" er for upresist for AI-en å tolke riktig på egen hånd -
-        den har tidligere lest "G17" som "Gustav" (pga. "G"), når det i
-        familieprofilen faktisk er Rasmus sitt EGNE, fulle lagnavn. Siden vi uansett
-        allerede har gjort det eksakte oppslaget her, er det tryggere å sette svaret
-        direkte enn å overlate en tvetydig forkortelse til AI-en."""
+    def _title_named_people(summary: str) -> list[str]:
+        """Finner ALLE i familien som tittelen eksplisitt navngir, basert på de samme
+        anførselstegn-navnene/kallenavnene som family_profile.py bruker (f.eks. "K" for
+        Kristin, "G17" for Rasmus). Returnerer en tom liste hvis tittelen ikke navngir
+        noen.
+
+        Tidligere returnerte denne bare ÉN person, og None ved flere navn ("R & G
+        gymtøy", "K og T trening"). Da falt oppføringen videre til tidsmatchingen mot
+        Spond under, og "K og T trening" ble tagget "Rasmus" fordi Rasmus hadde en
+        Spond-trening på omtrent samme tid. Navn i tittelen er et sterkere signal enn
+        tidssammenfall, så nå brukes ALLE de navngitte direkte. Personen settes direkte
+        (ikke overlatt til AI-en) fordi et kallenavn som "G17" er for upresist for AI-en
+        å tolke riktig på egen hånd - den har tidligere lest "G17" som "Gustav"."""
         summary_lower = (summary or "").strip().lower()
         if not summary_lower:
-            return None
+            return []
         matched_people = []
         for _person, _names in all_family_names.items():
             for _name in _names:
@@ -207,21 +208,22 @@ def _tag_calendar_events_with_spond(events: list[dict], spond_rows: list[dict], 
                 if _name_lower and _word_boundary_match(summary_lower, _name_lower):
                     matched_people.append(_person)
                     break
-        matched_people = list(dict.fromkeys(matched_people))
-        return matched_people[0] if len(matched_people) == 1 else None
+        return list(dict.fromkeys(matched_people))
 
     result = []
     for e in events:
         ev = dict(e)
 
-        # Unntak 1: tittelen nevner allerede ETT bestemt navn/kallenavn fra
+        # Unntak 1: tittelen nevner allerede ett eller flere navn/kallenavn fra
         # familieprofilen (f.eks. "K Ledermøte" -> Kristin, "Bandytrening G17" ->
         # Rasmus, siden "G17" er Rasmus sitt eget lagnavn i profilen). Da setter vi
         # "child" DIREKTE til den personen - og lar ALDRI en tilfeldig dato/tid-
         # sammenfall med en ANNEN persons aktivitet overstyre dette.
-        named_person = _title_named_person(e.get("summary", ""))
-        if named_person:
-            ev["child"] = named_person
+        # Gjelder også når tittelen nevner FLERE personer, f.eks. "K og T trening" ->
+        # "Kristin og Truls", "R & G gymtøy" -> "Rasmus og Gustav".
+        named_people = _title_named_people(e.get("summary", ""))
+        if named_people:
+            ev["child"] = " og ".join(named_people)
             result.append(ev)
             continue
         if not tagged_spond:
