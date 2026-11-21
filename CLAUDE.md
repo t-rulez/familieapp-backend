@@ -69,6 +69,8 @@ Railway, og koden har ingen reserveverdier som gir tilgang:
   den dagen det blir aktuelt med flere brukere.
 - **Varmestyring (`/heating/*`)** er bare for e-postene i `HEATING_ALLOWED_EMAILS`, eller hvis den
   ikke er satt, bare for den første brukeren (eieren). Kristin bruker eierens innlogging.
+- **WhatsApp-inngangene** (`/messages/ingest`, `/integrations/whatsapp/status`) avviser alt hvis
+  `API_TOKEN` mangler. WhatsApp-tjenesten sender verdien i headeren `x-api-token`.
 - Legg aldri inn nøkler, passord eller tokens i koden eller i `CLAUDE.md`.
 
 ## Viktige endepunkter

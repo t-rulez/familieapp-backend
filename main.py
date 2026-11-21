@@ -1167,8 +1167,11 @@ async def ingest_messages(
     payload: IngestPayload,
     x_api_token: Optional[str] = Header(None)
 ):
-    expected = os.environ.get("API_TOKEN")
-    if expected and x_api_token != expected:
+    # Avvis alt hvis API_TOKEN mangler (før slapp alt inn da). Koden er offentlig,
+    # så denne inngangen fra WhatsApp-tjenesten må alltid være beskyttet.
+    import hmac
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected or not hmac.compare_digest(x_api_token or "", expected):
         raise HTTPException(status_code=401, detail="Ugyldig token")
 
     # Finn første bruker hvis user_id ikke er satt
@@ -1216,8 +1219,11 @@ async def whatsapp_status(
 ):
     """Kalles av whatsapp-service når tilkoblingen faller ut, logges ut, eller kommer tilbake.
     Sender push-varsel til alle brukere som har et aktivt push-abonnement."""
-    expected = os.environ.get("API_TOKEN")
-    if expected and x_api_token != expected:
+    # Avvis alt hvis API_TOKEN mangler (før slapp alt inn da). Koden er offentlig,
+    # så denne inngangen fra WhatsApp-tjenesten må alltid være beskyttet.
+    import hmac
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected or not hmac.compare_digest(x_api_token or "", expected):
         raise HTTPException(status_code=401, detail="Ugyldig token")
 
     if payload.event == "logged_out":
