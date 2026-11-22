@@ -159,8 +159,9 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 
 ## Eksterne tjenester utenfor dette repoet
 
-- **WhatsApp-tjenesten** (Node.js/Baileys, egen Railway-tjeneste og eget repo, som ikke er
-  tilgjengelig her). Den sender meldinger til `/messages/ingest` og varsler frakobling til
+- **WhatsApp-tjenesten** (Node.js/Baileys, egen Railway-tjeneste, privat repo
+  `t-rulez/whatsapp-service`, som kan legges til i økten ved behov). Den er egen fordi den må holde en
+  åpen WhatsApp Web-tilkobling 24/7, bare finnes for Node.js, og ikke skal brytes av backend-deploys. Den sender meldinger til `/messages/ingest` og varsler frakobling til
   `/integrations/whatsapp/status`.
 - **HomeControl** (repo `t-rulez/home-control`): eierens egen, separate løsning for
   varmestyring (Mill, MELCloud, Adax). Den er ikke del av Brief, og Brief når den bare via proxyen
@@ -200,6 +201,11 @@ Bare navnene står her, aldri verdiene. Verdiene ligger i Railway, ikke i repoet
 - **200 OK betyr ikke at datastien virker.** Under en refaktorering forsvant
   `msg_context += …`. AI-en fikk tom kontekst og svarte 200 OK med tomt innhold, uten feilmelding.
   Sjekk at dataene faktisk kommer fram.
+- **Sluttdato i iCal er eksklusiv.** En heldagshendelse fredag–søndag har `DTEND` = mandag 00:00,
+  og en hendelse 20:00–00:00 slutter «neste dag» kl. 00:00. `format_events_for_ai()` regner derfor
+  siste dag som dagen før en slutt kl. 00:00, og merker heldagshendelser «(heldag)». Før 22.11.2026
+  ble Birger Cup vist også på mandag. `_tag_calendar_events_with_spond()` bruker fortsatt de rå
+  tidspunktene (heldags-deteksjonen trenger varigheten).
 - **Ukeoversikten varierer fra gang til gang** (`effort: "low"`, og temperaturen kan ikke senkes
   når tenking er på). Korte praktiske kommentarer i WhatsApp, som «husk pass», kan komme med i én
   runde og mangle i den neste (observert 20.11.2026: med i 2 av 3 runder). Trykk «Oppdater» et par

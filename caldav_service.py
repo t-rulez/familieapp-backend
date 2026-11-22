@@ -105,6 +105,7 @@ def _fetch_sync(url, username, password, calendar_filter, days_ahead, start_date
                                 "start": start_dt.isoformat(),
                                 "end": end_dt.isoformat() if end_dt else None,
                                 "time_str": time_str,
+                                "all_day": isinstance(dtstart.dt, date) and not isinstance(dtstart.dt, datetime),
                                 "location": location,
                                 "description": description[:200] if description else ""
                             }
@@ -167,18 +168,32 @@ def format_events_for_ai(events: list[dict]) -> str:
         time_str = e["time_str"]
         start_iso = e.get("start")
         end_iso = e.get("end")
+        all_day = bool(e.get("all_day"))
         if start_iso and end_iso:
             try:
                 start_dt = datetime.fromisoformat(start_iso)
                 end_dt = datetime.fromisoformat(end_iso)
-                if end_dt.date() != start_dt.date():
-                    end_str = (
-                        f"{days_no[end_dt.weekday()]} {end_dt.day}. "
-                        f"{months_no[end_dt.month-1]} kl. {end_dt.strftime('%H:%M')}"
-                    )
+                # I iCal er sluttdatoen EKSKLUSIV: en heldagshendelse fredag-søndag har
+                # DTEND = mandag 00:00, og en hendelse 20:00-00:00 slutter "neste dag"
+                # kl. 00:00. Uten justering ble dette sendt til AI-en som "... til mandag
+                # kl. 00:00", og hendelsen ble vist én dag for lenge (f.eks. Birger Cup
+                # også på mandag). Siste dag er derfor dagen FØR en slutt kl. 00:00.
+                last_day = end_dt
+                if end_dt > start_dt and end_dt.strftime('%H:%M:%S') == '00:00:00':
+                    last_day = end_dt - timedelta(days=1) if all_day else end_dt - timedelta(minutes=1)
+                if last_day.date() > start_dt.date():
+                    if all_day:
+                        end_str = f"{days_no[last_day.weekday()]} {last_day.day}. {months_no[last_day.month-1]}"
+                    else:
+                        end_str = (
+                            f"{days_no[last_day.weekday()]} {last_day.day}. "
+                            f"{months_no[last_day.month-1]} kl. {end_dt.strftime('%H:%M')}"
+                        )
                     time_str = f"{time_str} til {end_str}"
             except Exception:
                 pass
+        if all_day:
+            time_str = f"{time_str} (heldag)"
 
         line = f"- {time_str}: {e['summary']}"
         if e.get("location"):
